@@ -11,30 +11,51 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Install build dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Validate source
+        run: python -m py_compile kclone.py build.py
 
       - name: Build Kclone.exe
         run: python build.py
 
-      - name: Upload executable artifact
+      - name: Verify executable
+        shell: powershell
+        run: |
+          if (!(Test-Path "dist\Kclone.exe")) { throw "Kclone.exe was not produced." }
+          $size = (Get-Item "dist\Kclone.exe").Length
+          if ($size -lt 100000) { throw "Kclone.exe is unexpectedly small ($size bytes)." }
+          Write-Host "Kclone.exe: $size bytes"
+
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: Kclone-Windows
           path: dist/Kclone.exe
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Create rolling release
+      - name: Create versioned release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.0
-          name: Kclone v0.1.0
+          tag_name: v0.1.${{ github.run_number }}
+          name: Kclone v0.1.${{ github.run_number }}
+          body: |
+            Kclone Windows build
+            Commit: ${{ github.sha }}
+            Build: ${{ github.run_number }}
           prerelease: true
           make_latest: false
           files: dist/Kclone.exe
