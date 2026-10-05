@@ -6,6 +6,7 @@ PyInstaller.__main__.run([
     "--windowed",
     "--name=Kclone",
     "--add-data=kclone_mcp_server.py;.",
+    "--add-data=templates/os/build.py;templates/os",
     "--clean",
 ])
 
