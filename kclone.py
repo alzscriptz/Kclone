@@ -424,6 +424,31 @@ class Kclone(tk.Tk):
                 else:subprocess.Popen(["xdg-open",r])
             except Exception:pass
 
+    def open_folder(self,path):
+        try:
+            if os.name=='nt':os.startfile(path)
+            elif platform.system()=='Darwin':subprocess.Popen(['open',path])
+            else:subprocess.Popen(['xdg-open',path])
+        except Exception as e:self.log(str(e))
+
+    def build_panel(self):
+        if not self.project:return messagebox.showwarning("Build","Open a project first.")
+        w=tk.Toplevel(self);w.title("Kclone Build Center");w.geometry("880x620");w.configure(bg=BG)
+        self.label(w,"BUILD / ISO",22,FG,True).pack(anchor="w",padx=25,pady=(22,2));self.label(w,"Validate → build → artifacts → VM test.",9,MUTED).pack(anchor="w",padx=25,pady=(0,12))
+        out=tk.Text(w,bg=PANEL,fg=FG,relief="flat",font=("Consolas",10));out.pack(fill="both",expand=True,padx=25,pady=10)
+        def write(s):out.insert("end",s+"\n");out.see("end");self.log(s)
+        def validate():
+            issues=[x for x in ["KCLONE.json","resources","build","artifacts"] if not os.path.exists(os.path.join(self.project,x))]
+            if not os.path.exists(os.path.join(self.project,"build","build.py")):issues.append("build/build.py")
+            write("VALID" if not issues else "ISSUES: "+" | ".join(issues));return not issues
+        def build_now():
+            if not validate():return
+            script=os.path.join(self.project,"build","build.py")
+            def run():
+                p=subprocess.run([sys.executable,script],cwd=self.project,capture_output=True,text=True)
+                text=(p.stdout+"\n"+p.stderr).strip();self.after(0,lambda:(write(text[-10000:] or "Build finished."),self.populate_tree()))
+            threading.Thread(target=run,daemon=True).start()
+        bar=tk.Frame(w,bg=BG);bar.pack(fill="x",padx=25,pady=12);GlowButton(bar,"Validate",validate,False,130,bg=BG).pack(side="left",padx=3);GlowButton(bar,"Build ISO",build_now,True,140,bg=BG).pack(side="left",padx=3);GlowButton(bar,"Artifacts",lambda:self.open_folder(os.path.join(self.project,"artifacts")),False,130,bg=BG).pack(side="left",padx=3)
     def find_qemu(self):
         names=["qemu-system-x86_64","qemu-system-x86_64.exe"]
         for n in names:
@@ -456,49 +481,68 @@ class Kclone(tk.Tk):
 
     def vm_panel(self):
         if not self.project:return messagebox.showwarning("VM","Open an OS project first.")
-        q=self.find_qemu()
-        w=tk.Toplevel(self);w.title("Kclone OS Runtime");w.geometry("700x650");w.configure(bg=BG)
-        self.label(w,"OS RUNTIME",22,FG,True).pack(anchor="w",padx=30,pady=(26,4))
-        self.label(w,"Boot an ISO with hardware acceleration when the host supports it.",9,MUTED).pack(anchor="w",padx=30,pady=(0,18))
-        stat="READY — "+q if q else "QEMU BACKEND NOT INSTALLED"
-        self.label(w,stat,9,GREEN if q else RED,True).pack(anchor="w",padx=30,pady=(0,15))
-        cfg=tk.Frame(w,bg=PANEL,highlightbackground=BORDER,highlightthickness=1);cfg.pack(fill="x",padx=30)
-        values={}
-        for title,key,default,hi in [("MEMORY","memory_mb",6144,32768),("CPU CORES","cpus",6,32),("DISK TARGET (GB)","disk_gb",48,512)]:
-            row=tk.Frame(cfg,bg=PANEL);row.pack(fill="x",padx=18,pady=8);self.label(row,title,9,MUTED,True).pack(side="left")
-            e=tk.Entry(row,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat",width=10);e.insert(0,str(self.cfg["vm"].get(key,default)));e.pack(side="right");values[key]=e
-        accel=tk.BooleanVar(value=True);tk.Checkbutton(cfg,text="Enable 3D / VirGL (virtio-gpu-gl)",variable=accel,bg=PANEL,fg=FG,selectcolor=PANEL2,activebackground=PANEL,activeforeground=FG).pack(anchor="w",padx=18,pady=(3,14))
-        actions=tk.Frame(w,bg=BG);actions.pack(fill="x",padx=30,pady=18)
+        q=self.find_qemu();w=tk.Toplevel(self);w.title("Kclone OS Runtime");w.geometry("820x680");w.configure(bg=BG)
+        self.label(w,"OS RUNTIME",22,FG,True).pack(anchor="w",padx=30,pady=(25,3));self.label(w,"Persistent disk + hardware acceleration + virtio graphics with fallback.",9,MUTED).pack(anchor="w",padx=30,pady=(0,14));self.label(w,("● QEMU ready" if q else "● QEMU missing"),10,GREEN if q else RED,True).pack(anchor="w",padx=30)
+        panel=tk.Frame(w,bg=PANEL,highlightbackground=BORDER,highlightthickness=1);panel.pack(fill="x",padx=30,pady=14);vals={}
+        for title,key,default in [("MEMORY (MB)","memory_mb",6144),("CPU CORES","cpus",6),("DISK (GB)","disk_gb",48)]:
+            row=tk.Frame(panel,bg=PANEL);row.pack(fill="x",padx=18,pady=8);self.label(row,title,9,MUTED,True).pack(side="left");e=tk.Entry(row,bg=PANEL2,fg=FG,relief="flat",width=10);e.insert(0,str(self.cfg["vm"].get(key,default)));e.pack(side="right");vals[key]=e
+        gpu=tk.BooleanVar(value=self.cfg["vm"].get("enable_3d",True));tk.Checkbutton(panel,text="3D / VirGL (virtio-gpu-gl when supported)",variable=gpu,bg=PANEL,fg=FG,selectcolor=PANEL2,activebackground=PANEL,activeforeground=FG).pack(anchor="w",padx=18,pady=(2,14))
+        def install():
+            if os.name=="nt":cmd=["winget","install","-e","--id","SoftwareFreedomConservancy.QEMU","--accept-source-agreements","--accept-package-agreements"]
+            elif shutil.which("brew"):cmd=["brew","install","qemu"]
+            elif shutil.which("apt-get"):cmd=["sudo","apt-get","install","-y","qemu-system-x86"]
+            else:return messagebox.showinfo("QEMU","Install QEMU with your system package manager.")
+            threading.Thread(target=lambda:self.log((subprocess.run(cmd,capture_output=True,text=True).stdout or "")[-3000:]),daemon=True).start()
         def start():
             q2=self.find_qemu()
-            if not q2:
-                messagebox.showwarning("QEMU required","Kclone cannot emulate a real OS without a VM backend. Click Install QEMU once; Kclone will set it up automatically where supported.")
-                return
-            iso=None
-            if os.path.isdir(os.path.join(self.project,"artifacts")):
-                candidates=[os.path.join(self.project,"artifacts",x) for x in os.listdir(os.path.join(self.project,"artifacts")) if x.lower().endswith(".iso")]
-                if candidates:iso=sorted(candidates,key=os.path.getmtime)[-1]
-            if not iso:iso=filedialog.askopenfilename(title="Choose bootable ISO",filetypes=[("Bootable ISO","*.iso")],initialdir=os.path.join(self.project,"artifacts"))
+            if not q2:return messagebox.showwarning("QEMU required","Install QEMU, then press Start OS again.")
+            iso=self.latest_iso()
+            if not iso:iso=filedialog.askopenfilename(title="Choose bootable ISO",filetypes=[("ISO","*.iso")],initialdir=os.path.join(self.project,"artifacts"))
             if not iso:return
-            mem=int(values["memory_mb"].get()); cpus=int(values["cpus"].get()); disk=int(values["disk_gb"].get())
-            self.cfg["vm"]={"memory_mb":mem,"cpus":cpus,"disk_gb":disk,"enable_3d":accel.get()};save_config(self.cfg)
-            cmd=[q2,"-accel","auto","-machine","q35","-m",str(mem),"-smp",str(cpus),"-drive",f"file={iso},media=cdrom,readonly=on","-boot","d","-device","virtio-net-pci,netdev=n0","-netdev","user,id=n0","-device","virtio-gpu-gl,hostmem=4G,blob=true"]
-            if accel.get():cmd += ["-display","gtk,gl=on" if platform.system()=="Linux" else "sdl,gl=on"]
-            else:cmd[-1]="virtio-gpu"
-            self.log("Starting accelerated VM: "+" ".join(cmd))
+            mem=int(vals["memory_mb"].get());cpus=int(vals["cpus"].get());disk=int(vals["disk_gb"].get());self.cfg["vm"].update({"memory_mb":mem,"cpus":cpus,"disk_gb":disk,"enable_3d":gpu.get()});save_config(self.cfg)
+            diskpath=os.path.join(self.project,"artifacts","vm-disk.qcow2");qimg=shutil.which("qemu-img")
+            if qimg and not os.path.exists(diskpath):subprocess.run([qimg,"create","-f","qcow2",diskpath,f"{disk}G"],capture_output=True,text=True)
+            accel="tcg"
+            try:
+                helptext=subprocess.run([q2,"-accel","help"],capture_output=True,text=True,timeout=8).stdout.lower();preferred="whpx" if os.name=="nt" else ("kvm" if platform.system()=="Linux" else ("hvf" if platform.system()=="Darwin" else "tcg"))
+                if preferred in helptext:accel=preferred
+            except Exception:pass
+            try:devices=subprocess.run([q2,"-device","help"],capture_output=True,text=True,timeout=8).stdout
+            except Exception:devices=""
+            gpuarg="virtio-gpu-gl,hostmem=4G,blob=true" if gpu.get() and "virtio-gpu-gl" in devices else "virtio-gpu"
+            display="gtk,gl=on" if platform.system()=="Linux" and gpu.get() else ("sdl,gl=on" if gpu.get() else "gtk")
+            cmd=[q2,"-accel",accel,"-machine","q35","-m",str(mem),"-smp",str(cpus)]
+            if os.path.exists(diskpath):cmd += ["-drive",f"file={diskpath},if=virtio,format=qcow2"]
+            cmd += ["-drive",f"file={iso},media=cdrom,readonly=on","-boot","d","-device","virtio-net-pci,netdev=n0","-netdev","user,id=n0","-device",gpuarg,"-display",display]
+            self.log("Starting VM with "+accel+" acceleration.");self.log("QEMU: "+" ".join(cmd))
             try:self.vm_proc=subprocess.Popen(cmd);w.destroy()
             except Exception as e:messagebox.showerror("VM",str(e))
-        if not q:GlowButton(actions,"Install QEMU",self.install_qemu,True,width=180).pack(side="left",padx=4)
-        GlowButton(actions,"Start OS",start,True,width=180).pack(side="left",padx=4)
-        GlowButton(actions,"Close",w.destroy,width=120).pack(side="right",padx=4)
-        self.label(w,"Recommended guest support: virtio-gpu/DRM in the OS kernel. VirGL 3D depends on host graphics support.",8,MUTED).pack(anchor="w",padx=30,pady=8)
+        bar=tk.Frame(w,bg=BG);bar.pack(fill="x",padx=30,pady=16)
+        if not q:GlowButton(bar,"Install QEMU",install,True,165,bg=BG).pack(side="left",padx=3)
+        GlowButton(bar,"Start OS",start,True,150,bg=BG).pack(side="left",padx=3);GlowButton(bar,"Open Artifacts",lambda:self.open_folder(os.path.join(self.project,"artifacts")),False,150,bg=BG).pack(side="left",padx=3)
+
+    def latest_iso(self):
+        p=os.path.join(self.project,"artifacts")
+        if not os.path.isdir(p):return None
+        xs=[os.path.join(p,n) for n in os.listdir(p) if n.lower().endswith(".iso")]
+        return max(xs,key=os.path.getmtime) if xs else None
 
     def choose_workspace(self):
         p=filedialog.askdirectory(initialdir=self.workspace)
         if p:self.workspace=p;self.cfg["workspace"]=p;save_config(self.cfg);self.refresh_projects();self.log("Workspace changed.")
 
     def settings(self):
-        messagebox.showinfo("Kclone","Workspace: "+self.workspace+"\nAI config: per-project .kclone/ai/config.json\nMCP config: per-project .kclone/mcp/servers.json\nVM: QEMU + virtio-gpu-gl/VirGL when available.")
+        w=tk.Toplevel(self);w.title("Kclone Settings");w.geometry("720x620");w.configure(bg=BG)
+        self.label(w,"SETTINGS",23,FG,True).pack(anchor="w",padx=28,pady=(24,3));self.label(w,"Global workspace and VM defaults. Project AI/MCP settings stay inside each project.",9,MUTED).pack(anchor="w",padx=28,pady=(0,18))
+        f=tk.Frame(w,bg=BG);f.pack(fill="x",padx=28);self.label(f,"WORKSPACE",9,MUTED,True).pack(anchor="w")
+        ws=tk.Entry(f,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat");ws.insert(0,self.workspace);ws.pack(fill="x",ipady=8,pady=(5,15))
+        for key in ["memory_mb","cpus","disk_gb"]:
+            self.label(f,key.upper(),9,MUTED,True).pack(anchor="w");e=tk.Entry(f,bg=PANEL2,fg=FG,relief="flat");e.insert(0,str(self.cfg["vm"].get(key)));e.pack(fill="x",ipady=6,pady=3);setattr(w,key,e)
+        def save():
+            self.workspace=ws.get().strip();os.makedirs(self.workspace,exist_ok=True);self.cfg["workspace"]=self.workspace
+            for key in ["memory_mb","cpus","disk_gb"]:self.cfg["vm"][key]=int(getattr(w,key).get())
+            save_config(self.cfg);self.refresh_projects();self.log("Settings saved.");w.destroy()
+        GlowButton(w,"Save Settings",save,True,180,bg=BG).pack(pady=22)
 
     def close(self):
         try:
