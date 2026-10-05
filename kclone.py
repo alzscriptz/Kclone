@@ -34,8 +34,19 @@ class GlowButton(tk.Canvas):
         self.create_text(w//2,21,text=self.text,fill="#ffffff" if self.accent else FG,font=("Segoe UI",10,"bold"))
     def enter(self):
         self.hover=True; self.draw()
+        if getattr(self,"_pulse",None):
+            try:self.after_cancel(self._pulse)
+            except Exception:pass
+        self._pulse=self.after(40,self._hover_tick,0)
+    def _hover_tick(self,n):
+        if not self.hover:return
+        self.offset=1 if n%2==0 else 0;self.draw();self._pulse=self.after(90,self._hover_tick,n+1)
     def leave(self):
-        self.hover=False; self.draw()
+        self.hover=False
+        if getattr(self,"_pulse",None):
+            try:self.after_cancel(self._pulse)
+            except Exception:pass
+        self.offset=0;self.draw()
 
 class Kclone(tk.Tk):
     def __init__(self):
