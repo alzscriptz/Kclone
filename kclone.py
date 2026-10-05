@@ -1,164 +1,335 @@
-import json, os, platform, shutil, subprocess, tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+import json, os, platform, shutil, subprocess, threading, time, tkinter as tk
+from tkinter import filedialog, messagebox
 
-APP=os.path.join(os.path.expanduser("~"),".kclone"); CFG=os.path.join(APP,"config.json")
-BG="#09090b"; PANEL="#111114"; PANEL2="#18181d"; FG="#f4f4f5"; MUTED="#92929d"; SEL="#263b59"
-os.makedirs(APP,exist_ok=True)
-DEFAULT={"workspace":os.path.join(os.path.expanduser("~"),"KcloneProjects"),"vm":{"memory_mb":4096,"cpus":4,"disk_gb":32,"enable_3d":True}}
-def load():
+ROOT=os.path.expanduser("~/.kclone")
+CONFIG=os.path.join(ROOT,"config.json")
+BG="#07080a"; PANEL="#0d1015"; PANEL2="#11151c"; PANEL3="#161b24"; FG="#f4f7fb"; MUTED="#7f8998"; BLUE="#5ea2ff"; BLUE2="#8cc4ff"; GREEN="#55d69a"; RED="#ff6b7a"; BORDER="#202735"
+
+DEFAULT={"workspace":os.path.join(os.path.expanduser("~"),"KcloneProjects"),"vm":{"memory_mb":6144,"cpus":6,"disk_gb":48,"enable_3d":True},"ai":{"config":".kclone/ai/config.json"}}
+os.makedirs(ROOT,exist_ok=True)
+
+def load_config():
     try:
-        with open(CFG,encoding="utf-8") as f: c=json.load(f)
-    except Exception: c={}
-    return {**DEFAULT,**c,"vm":{**DEFAULT["vm"],**c.get("vm",{})}}
-def save(c):
-    with open(CFG,"w",encoding="utf-8") as f: json.dump(c,f,indent=2)
-def valid(n): return bool(n) and all(x not in n for x in '/\\:*?"<>|') and n not in (".","..")
+        with open(CONFIG,encoding="utf-8") as f: data=json.load(f)
+    except Exception: data={}
+    return {**DEFAULT,**data,"vm":{**DEFAULT["vm"],**data.get("vm",{})},"ai":{**DEFAULT["ai"],**data.get("ai",{})}}
+
+def save_config(data):
+    with open(CONFIG,"w",encoding="utf-8") as f: json.dump(data,f,indent=2)
+
+def safe_name(name):
+    return bool(name) and name not in (".","..") and not any(c in name for c in '/\\:*?"<>|')
+
+class GlowButton(tk.Canvas):
+    def __init__(self,parent,text,command,accent=False,width=150,**kw):
+        super().__init__(parent,width=width,height=42,bg=kw.pop("bg",PANEL),highlightthickness=0,bd=0)
+        self.text=text; self.command=command; self.accent=accent; self.hover=False; self.offset=0
+        self.bind("<Enter>",self.enter); self.bind("<Leave>",self.leave); self.bind("<Button-1>",lambda e:self.command())
+        self.draw()
+    def draw(self):
+        self.delete("all"); w=int(self["width"]); h=42
+        fill="#1b4f91" if self.accent else PANEL2
+        if self.hover: fill="#2868b6" if self.accent else "#1d2531"
+        self.create_rectangle(2,2,w-2,h-2,fill=fill,outline="#31577f" if self.hover else BORDER,width=1)
+        self.create_text(w//2,21,text=self.text,fill="#ffffff" if self.accent else FG,font=("Segoe UI",10,"bold"))
+    def enter(self):
+        self.hover=True; self.draw()
+    def leave(self):
+        self.hover=False; self.draw()
 
 class Kclone(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title("Kclone — Development Platform"); self.geometry("1450x900"); self.minsize(1050,680); self.configure(bg=BG)
-        self.c=load(); self.workspace=self.c["workspace"]; os.makedirs(self.workspace,exist_ok=True); self.project=None; self.file=None
-        self.style(); self.ui(); self.refresh()
-    def style(self):
-        s=ttk.Style(self); s.theme_use("clam"); s.configure(".",background=BG,foreground=FG,font=("Segoe UI",10))
-        s.configure("TFrame",background=BG); s.configure("Panel.TFrame",background=PANEL); s.configure("TLabel",background=BG,foreground=FG)
-        s.configure("TButton",background=PANEL2,foreground=FG,borderwidth=0,padding=(12,8)); s.map("TButton",background=[("active","#24242b")])
-        s.configure("Accent.TButton",background="#245a9c",foreground="white"); s.map("Accent.TButton",background=[("active","#3274c4")])
-        s.configure("Treeview",background=PANEL,fieldbackground=PANEL,foreground=FG,rowheight=27,borderwidth=0); s.map("Treeview",background=[("selected",SEL)])
-    def ui(self):
-        h=tk.Frame(self,bg=BG); h.pack(fill="x",padx=18,pady=(14,8))
-        tk.Label(h,text="Kclone",bg=BG,fg=FG,font=("Segoe UI",23,"bold")).pack(side="left")
-        tk.Label(h,text="  OS • Apps • Build • AI",bg=BG,fg=MUTED).pack(side="left",pady=8)
-        for t,cmd,st in [("New Project",self.new_project,"Accent.TButton"),("Open",self.open_folder,"TButton"),("Settings",self.settings,"TButton")]:
-            ttk.Button(h,text=t,command=cmd,style=st).pack(side="right",padx=4)
-        p=ttk.Panedwindow(self,orient="horizontal"); p.pack(fill="both",expand=True,padx=14,pady=(0,8))
-        l=ttk.Frame(p,style="Panel.TFrame",padding=10); m=ttk.Frame(p,style="Panel.TFrame",padding=8); r=ttk.Frame(p,style="Panel.TFrame",padding=10)
-        p.add(l,weight=1); p.add(m,weight=4); p.add(r,weight=2)
-        ttk.Label(l,text="PROJECTS",foreground=MUTED).pack(anchor="w",pady=(2,8))
-        self.projects=tk.Listbox(l,bg=PANEL,fg=FG,selectbackground=SEL,selectforeground=FG,relief="flat",highlightthickness=0,activestyle="none")
-        self.projects.pack(fill="both",expand=True); self.projects.bind("<<ListboxSelect>>",lambda e:self.open_selected())
-        ttk.Button(l,text="+ New Project",command=self.new_project,style="Accent.TButton").pack(fill="x",pady=8); ttk.Button(l,text="Workspace",command=self.choose_workspace).pack(fill="x")
-        ttk.Label(m,text="EXPLORER",foreground=MUTED).pack(anchor="w",pady=(2,6)); self.tree=ttk.Treeview(m,show="tree"); self.tree.pack(fill="both",expand=True); self.tree.bind("<<TreeviewSelect>>",self.tree_file)
-        bar=tk.Frame(m,bg=PANEL2); bar.pack(fill="x",pady=(8,0)); self.file_label=tk.Label(bar,text="No file open",bg=PANEL2,fg=MUTED,anchor="w"); self.file_label.pack(side="left",fill="x",expand=True,padx=10,pady=6); ttk.Button(bar,text="Save",command=self.save_file).pack(side="right",padx=4,pady=3)
-        self.editor=tk.Text(m,bg="#0d0d10",fg=FG,insertbackground=FG,selectbackground=SEL,relief="flat",undo=True,font=("Consolas",11),padx=12,pady=10); self.editor.pack(fill="both",expand=True)
-        ttk.Label(r,text="AI / MCP",foreground=MUTED).pack(anchor="w",pady=(2,6))
-        self.ai=tk.Text(r,bg="#0d0d10",fg=FG,relief="flat",wrap="word"); self.ai.pack(fill="both",expand=True); self.ai.insert("end","Kclone project-aware AI\\n\\nWorkspace: files • assets • resources • builds • Git • MCP • VM\\n"); self.ai.configure(state="disabled")
-        row=ttk.Frame(r); row.pack(fill="x",pady=8); self.aiin=ttk.Entry(row); self.aiin.pack(side="left",fill="x",expand=True); self.aiin.bind("<Return>",lambda e:self.send_ai()); ttk.Button(row,text="Send",command=self.send_ai,style="Accent.TButton").pack(side="right",padx=(5,0))
-        for t,cmd,st in [("MCP Configuration",self.mcp,"TButton"),("Resources",self.resources,"TButton"),("VM / OS Startup",self.vm,"Accent.TButton")]: ttk.Button(r,text=t,command=cmd,style=st).pack(fill="x",pady=2)
-        self.out=tk.Text(self,bg="#070708",fg="#b9b9c4",height=7,relief="flat",font=("Consolas",9)); self.out.pack(fill="x",padx=14,pady=(0,14)); self.log("Ready — dark IDE loaded.")
-    def log(self,x): self.out.insert("end",x+"\\n"); self.out.see("end")
-    def refresh(self):
+        super().__init__()
+        self.title("Kclone")
+        self.geometry("1500x920"); self.minsize(1180,720); self.configure(bg=BG)
+        self.cfg=load_config(); self.workspace=self.cfg["workspace"]; os.makedirs(self.workspace,exist_ok=True)
+        self.project=None; self.current_file=None; self.vm_proc=None
+        self.protocol("WM_DELETE_WINDOW",self.close)
+        self.build_shell(); self.refresh_projects()
+
+    def label(self,p,text,size=10,color=FG,bold=False):
+        return tk.Label(p,text=text,bg=p.cget("bg"),fg=color,font=("Segoe UI",size,"bold" if bold else "normal"))
+
+    def build_shell(self):
+        top=tk.Frame(self,bg=BG,height=70); top.pack(fill="x",padx=22,pady=(16,8))
+        self.label(top,"KCLONE",26,FG,True).pack(side="left")
+        self.label(top,"  DEVELOPMENT WORKSPACE",10,MUTED,True).pack(side="left",pady=11)
+        right=tk.Frame(top,bg=BG); right.pack(side="right")
+        GlowButton(right,"Settings",self.settings,width=120).pack(side="left",padx=4)
+        GlowButton(right,"New Project",self.new_project,True,width=145).pack(side="left",padx=4)
+
+        body=tk.Frame(self,bg=BG); body.pack(fill="both",expand=True,padx=18)
+        self.sidebar=tk.Frame(body,bg=PANEL,width=255,highlightbackground=BORDER,highlightthickness=1); self.sidebar.pack(side="left",fill="y",padx=(0,10))
+        self.main=tk.Frame(body,bg=BG); self.main.pack(side="left",fill="both",expand=True)
+        self.inspector=tk.Frame(body,bg=PANEL,width=300,highlightbackground=BORDER,highlightthickness=1); self.inspector.pack(side="right",fill="y",padx=(10,0))
+
+        self.label(self.sidebar,"WORKSPACE",9,MUTED,True).pack(anchor="w",padx=16,pady=(18,8))
+        self.projects=tk.Listbox(self.sidebar,bg=PANEL,fg=FG,selectbackground="#214a78",selectforeground="#fff",relief="flat",bd=0,highlightthickness=0,font=("Segoe UI",10),activestyle="none")
+        self.projects.pack(fill="both",expand=True,padx=8); self.projects.bind("<<ListboxSelect>>",lambda e:self.open_selected())
+        GlowButton(self.sidebar,"＋  New Project",self.new_project,True,width=220).pack(padx=16,pady=8)
+        GlowButton(self.sidebar,"⌂  Workspace",self.choose_workspace,width=220).pack(padx=16,pady=(0,16))
+
+        head=tk.Frame(self.main,bg=BG); head.pack(fill="x",pady=(0,8))
+        self.project_title=self.label(head,"No project open",20,FG,True); self.project_title.pack(side="left")
+        self.status=self.label(head,"● Ready",9,GREEN,True); self.status.pack(side="right",pady=7)
+
+        split=tk.Frame(self.main,bg=BG); split.pack(fill="both",expand=True)
+        explorer=tk.Frame(split,bg=PANEL,highlightbackground=BORDER,highlightthickness=1); explorer.pack(side="left",fill="both",expand=True,padx=(0,6))
+        editor=tk.Frame(split,bg="#0a0c10",highlightbackground=BORDER,highlightthickness=1); editor.pack(side="right",fill="both",expand=True,padx=(6,0))
+        self.label(explorer,"PROJECT EXPLORER",9,MUTED,True).pack(anchor="w",padx=14,pady=(12,7))
+        self.tree=tk.Listbox(explorer,bg=PANEL,fg=FG,selectbackground="#18283b",selectforeground=BLUE2,relief="flat",bd=0,highlightthickness=0,font=("Consolas",10),activestyle="none")
+        self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.tree.bind("<Double-Button-1>",lambda e:self.tree_open())
+        self.filebar=tk.Frame(editor,bg=PANEL2,height=40); self.filebar.pack(fill="x")
+        self.file_label=self.label(self.filebar,"  Welcome",9,MUTED); self.file_label.pack(side="left",fill="x",expand=True)
+        GlowButton(self.filebar,"Save",self.save_file,width=85,bg=PANEL2).pack(side="right",padx=5,pady=4)
+        self.editor=tk.Text(editor,bg="#090b0f",fg="#e9edf3",insertbackground=BLUE2,selectbackground="#213c5b",relief="flat",font=("Consolas",11),padx=16,pady=14,undo=True)
+        self.editor.pack(fill="both",expand=True)
+
+        self.label(self.inspector,"PROJECT CONTROL",9,MUTED,True).pack(anchor="w",padx=16,pady=(18,8))
+        self.card(self.inspector,"AI", "Project-aware AI connection",self.ai_panel)
+        self.card(self.inspector,"MCP","Tools, servers and permissions",self.mcp_panel)
+        self.card(self.inspector,"RESOURCES","Assets, SDKs and toolchains",self.resources_panel)
+        self.card(self.inspector,"VM / OS","Boot, acceleration and testing",self.vm_panel)
+
+        bottom=tk.Frame(self,bg="#050608",height=145,highlightbackground=BORDER,highlightthickness=1); bottom.pack(fill="x",padx=18,pady=(10,16))
+        self.label(bottom,"OUTPUT",9,MUTED,True).pack(anchor="w",padx=12,pady=(8,2))
+        self.output=tk.Text(bottom,bg="#050608",fg="#9aa5b4",relief="flat",height=6,font=("Consolas",9),state="disabled")
+        self.output.pack(fill="both",expand=True,padx=12,pady=(0,7))
+        self.log("Kclone ready. Create or open a project.")
+
+    def card(self,parent,title,subtitle,command):
+        c=tk.Frame(parent,bg=PANEL2,highlightbackground=BORDER,highlightthickness=1,cursor="hand2")
+        c.pack(fill="x",padx=12,pady=5)
+        self.label(c,title,10,FG,True).pack(anchor="w",padx=12,pady=(10,1))
+        self.label(c,subtitle,8,MUTED).pack(anchor="w",padx=12,pady=(0,9))
+        c.bind("<Button-1>",lambda e:command())
+        c.bind("<Enter>",lambda e:c.configure(bg=PANEL3))
+        c.bind("<Leave>",lambda e:c.configure(bg=PANEL2))
+
+    def log(self,msg):
+        self.output.configure(state="normal"); self.output.insert("end",msg+"\n"); self.output.see("end"); self.output.configure(state="disabled")
+
+    def refresh_projects(self):
         self.projects.delete(0,"end")
         for n in sorted(os.listdir(self.workspace)):
             if os.path.isdir(os.path.join(self.workspace,n)) and not n.startswith("."): self.projects.insert("end",n)
-    def path(self): 
-        s=self.projects.curselection()
-        return os.path.join(self.workspace,self.projects.get(s[0])) if s else self.project
+
     def open_selected(self):
-        p=self.path()
-        if p and os.path.isdir(p): self.project=os.path.abspath(p); self.populate(); self.log("Opened "+self.project)
-    def populate(self):
-        self.tree.delete(*self.tree.get_children())
-        if not self.project:return
-        q=self.tree.insert("", "end",text=os.path.basename(self.project),values=(self.project,"dir"),open=True); self.walk(q,self.project)
-    def walk(self,parent,path):
-        try: names=sorted(os.listdir(path),key=lambda n:(not os.path.isdir(os.path.join(path,n)),n.lower()))
-        except OSError:return
-        for n in names:
-            if n==".git" or n.startswith("__pycache__"):continue
-            f=os.path.join(path,n); k="dir" if os.path.isdir(f) else "file"; q=self.tree.insert(parent,"end",text=n,values=(f,k),open=False)
-            if k=="dir":self.walk(q,f)
-    def tree_file(self,e=None):
-        s=self.tree.selection()
+        s=self.projects.curselection()
         if not s:return
-        v=self.tree.item(s[0],"values")
-        if len(v)<2 or v[1]!="file":return
-        f=v[0]
-        try:
-            if os.path.getsize(f)>2000000:return
-            with open(f,encoding="utf-8") as z:d=z.read()
-        except Exception:return
-        self.file=f; self.file_label.config(text=os.path.relpath(f,self.project)); self.editor.delete("1.0","end"); self.editor.insert("1.0",d)
+        p=os.path.join(self.workspace,self.projects.get(s[0]))
+        if os.path.isdir(p): self.open_project(p)
+
+    def open_project(self,p):
+        self.project=os.path.abspath(p); self.project_title.config(text=os.path.basename(p)); self.status.config(text="● Project loaded",fg=GREEN); self.populate_tree(); self.log("Opened "+self.project)
+
+    def populate_tree(self):
+        self.tree.delete(0,"end")
+        if not self.project:return
+        def walk(path,depth=0):
+            try:names=sorted(os.listdir(path),key=lambda n:(not os.path.isdir(os.path.join(path,n)),n.lower()))
+            except OSError:return
+            for n in names:
+                if n in (".git","__pycache__"):continue
+                f=os.path.join(path,n); prefix="   "*depth+("▸ " if os.path.isdir(f) else "• ")
+                self.tree.insert("end",prefix+n)
+                if os.path.isdir(f):walk(f,depth+1)
+        self.tree.insert("end","▾ "+os.path.basename(self.project)); walk(self.project,1)
+
+    def tree_open(self):
+        idx=self.tree.curselection()
+        if not idx or not self.project:return
+        shown=self.tree.get(idx[0]).strip()
+        if shown.startswith(("▾ ","▸ ")):return
+        rel=shown[2:] if shown.startswith("• ") else shown
+        # Resolve displayed relative path by walking from indentation.
+        line=self.tree.get(idx[0]); depth=(len(line)-len(line.lstrip(" "))//3)
+        rel=shown
+        for i in range(idx[0]-1,-1,-1):
+            line2=self.tree.get(i); d=(len(line2)-len(line2.lstrip(" ")))//3
+            name=line2.strip()
+            if d<depth and name.startswith(("▾ ","▸ ")):
+                base=name[2:]; rel=os.path.join(base,rel); depth=d; 
+                if d==0:break
+        path=os.path.join(self.project,rel.replace("\\","/"))
+        if os.path.isfile(path):
+            try:
+                if os.path.getsize(path)>3000000: raise ValueError("File is too large for the editor.")
+                with open(path,encoding="utf-8") as f:data=f.read()
+                self.current_file=path; self.file_label.config(text="  "+os.path.relpath(path,self.project)); self.editor.delete("1.0","end"); self.editor.insert("1.0",data)
+            except Exception as e:self.log(str(e))
+
     def save_file(self):
-        if not self.file:return
+        if not self.current_file:return
         try:
-            with open(self.file,"w",encoding="utf-8") as f:f.write(self.editor.get("1.0","end-1c"))
-            self.log("Saved "+self.file)
+            with open(self.current_file,"w",encoding="utf-8") as f:f.write(self.editor.get("1.0","end-1c"))
+            self.log("Saved "+self.current_file); self.status.config(text="● Saved",fg=GREEN)
         except Exception as e:messagebox.showerror("Kclone",str(e))
+
     def new_project(self):
-        w=tk.Toplevel(self); w.title("New Project"); w.geometry("520x350"); w.configure(bg=BG); w.grab_set()
-        tk.Label(w,text="Create a project",bg=BG,fg=FG,font=("Segoe UI",18,"bold")).pack(anchor="w",padx=25,pady=(22,5)); tk.Label(w,text="Creates the project, folders, manifest, resources and Git repository.",bg=BG,fg=MUTED).pack(anchor="w",padx=25,pady=(0,15))
-        f=ttk.Frame(w); f.pack(fill="x",padx=25); ttk.Label(f,text="Name").pack(anchor="w"); n=ttk.Entry(f); n.pack(fill="x",pady=(3,10)); ttk.Label(f,text="Template").pack(anchor="w")
-        typ=ttk.Combobox(f,state="readonly",values=["OS / ISO","Desktop App","Empty"]); typ.current(0); typ.pack(fill="x",pady=(3,10)); priv=tk.BooleanVar(value=True); ttk.Checkbutton(f,text="Private project metadata",variable=priv).pack(anchor="w")
-        err=tk.Label(w,text="",bg=BG,fg="#e88"); err.pack(anchor="w",padx=25,pady=4)
+        w=tk.Toplevel(self); w.title("New Project"); w.geometry("620x520"); w.configure(bg=BG); w.transient(self); w.grab_set()
+        self.label(w,"Create a new workspace",22,FG,True).pack(anchor="w",padx=32,pady=(28,4))
+        self.label(w,"A complete project is created — folders, AI context, MCP, resources and Git.",9,MUTED).pack(anchor="w",padx=32,pady=(0,22))
+        form=tk.Frame(w,bg=BG); form.pack(fill="x",padx=32)
+        self.label(form,"PROJECT NAME",9,MUTED,True).pack(anchor="w"); name=tk.Entry(form,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat",font=("Segoe UI",12)); name.pack(fill="x",pady=(6,16),ipady=9)
+        self.label(form,"TEMPLATE",9,MUTED,True).pack(anchor="w"); template=tk.StringVar(value="OS / ISO")
+        for value,desc in [("OS / ISO","Kernel, boot, drivers, assets, resources, artifacts and VM profile"),("Desktop App","Source, assets, resources, build and artifacts"),("Empty","Minimal project with Kclone metadata")]:
+            tk.Radiobutton(form,text=value+"   "+desc,variable=template,value=value,bg=BG,fg=FG,selectcolor=PANEL2,activebackground=BG,activeforeground=FG).pack(anchor="w",pady=4)
+        error=self.label(w,"",9,RED); error.pack(anchor="w",padx=32,pady=8)
         def create():
-            name=n.get().strip(); p=os.path.join(self.workspace,name)
-            if not valid(name):err.config(text="Invalid project name.");return
-            if os.path.exists(p):err.config(text="Project already exists.");return
+            n=name.get().strip()
+            if not safe_name(n):error.config(text="Use a valid project name.");return
+            p=os.path.join(self.workspace,n)
+            if os.path.exists(p):error.config(text="That project already exists.");return
             try:
                 os.makedirs(p)
-                dirs=["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","docs","artifacts"] if typ.get()=="OS / ISO" else ["src","assets","resources","build","artifacts","docs"]
-                for d in dirs:os.makedirs(os.path.join(p,d),exist_ok=True)
-                with open(os.path.join(p,"KCLONE.json"),"w",encoding="utf-8") as z:json.dump({"name":name,"type":"os" if typ.get()=="OS / ISO" else "application","version":3,"private":priv.get(),"ai_project_aware":True,"mcp_project_aware":True,"targets":["iso","exe","apk","aab"],"workspace":{"asset_tree":"assets","resource_tree":"resources","build_tree":"build","artifact_tree":"artifacts"},"vm":DEFAULT["vm"]},z,indent=2)
-                with open(os.path.join(p,"resources","manifest.json"),"w",encoding="utf-8") as z:json.dump({"resources":[],"install_root":"resources","auto_include":True},z,indent=2)
-                os.makedirs(os.path.join(p,".kclone","mcp"),exist_ok=True)
-                with open(os.path.join(p,".kclone","mcp","servers.json"),"w",encoding="utf-8") as z:json.dump({"projectAware":True,"mcpServers":{},"scope":"project","capabilities":["workspace","files","assets","resources","build","tests","git","vm"]},z,indent=2)
+                folders=["src","assets","resources","build","artifacts","docs"] if template.get()!="OS / ISO" else ["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","docs","artifacts"]
+                for d in folders:os.makedirs(os.path.join(p,d),exist_ok=True)
+                k={"name":n,"type":"os" if template.get()=="OS / ISO" else "application","version":4,"ai_project_aware":True,"mcp_project_aware":True,"targets":["iso","exe","apk","aab"],"workspace":{"root":".","asset_tree":"assets","resource_tree":"resources","build_tree":"build","artifact_tree":"artifacts"},"ai":{"config":".kclone/ai/config.json"},"mcp":{"config":".kclone/mcp/servers.json"},"vm":{"memory_mb":6144,"cpus":6,"disk_gb":48,"enable_3d":True}}
+                self.write_json(os.path.join(p,"KCLONE.json"),k)
+                self.write_json(os.path.join(p,"resources","manifest.json"),{"version":1,"resources":[],"install_root":"resources","auto_include":True})
+                self.write_json(os.path.join(p,".kclone","ai","config.json"),{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
+                self.write_json(os.path.join(p,".kclone","mcp","servers.json"),{"version":1,"projectAware":True,"scope":"project","mcpServers":{},"capabilities":["workspace","files","assets","resources","build","tests","git","vm"]})
+                self.write_json(os.path.join(p,".kclone","vm.json"),{"backend":"qemu","memory_mb":6144,"cpus":6,"disk_gb":48,"graphics":{"device":"virtio-gpu-gl","3d":True,"hostmem":"4G"},"acceleration":{"auto":True,"kvm":True,"whpx":True,"hvf":True}})
+                with open(os.path.join(p,".gitignore"),"w",encoding="utf-8") as f:f.write(".venv/\\n__pycache__/\\n*.pyc\\n")
                 rr=subprocess.run(["git","init",p],capture_output=True,text=True)
-                if rr.returncode:raise RuntimeError(rr.stderr.strip() or "git init failed")
-                self.project=p; self.refresh(); 
+                if rr.returncode:raise RuntimeError(rr.stderr.strip() or "Git initialization failed")
+                self.project=p; self.refresh_projects()
                 for i in range(self.projects.size()):
-                    if self.projects.get(i)==name:self.projects.selection_set(i);break
-                self.populate();self.log("Created "+p);w.destroy();messagebox.showinfo("Kclone","Project created successfully.\\n\\n"+p)
-            except Exception as e:
-                err.config(text=str(e)); shutil.rmtree(p,ignore_errors=True)
-        ttk.Button(w,text="Create Project",command=create,style="Accent.TButton").pack(pady=15)
-    def choose_workspace(self):
-        p=filedialog.askdirectory(initialdir=self.workspace)
-        if p:self.workspace=p;self.c["workspace"]=p;save(self.c);self.refresh()
-    def open_folder(self):
-        p=self.path() or filedialog.askdirectory(initialdir=self.workspace)
-        if not p:return
-        self.project=os.path.abspath(p);self.populate()
-        try:
-            if os.name=="nt":os.startfile(p)
-            elif platform.system()=="Darwin":subprocess.Popen(["open",p])
-            else:subprocess.Popen(["xdg-open",p])
-        except Exception:pass
-    def send_ai(self):
-        x=self.aiin.get().strip()
-        if not x:return
-        self.aiin.delete(0,"end");self.ai.configure(state="normal");self.ai.insert("end","\\nYou: "+x+"\\n")
-        self.ai.insert("end","Context: "+(self.project or "no project")+"\\nAI/MCP is project-scoped; connect an MCP provider to execute file/build/Git actions.\\n");self.ai.configure(state="disabled")
-    def mcp(self):
+                    if self.projects.get(i)==n:self.projects.selection_set(i);break
+                self.open_project(p); self.log("Created project successfully."); w.destroy()
+            except Exception as e:error.config(text=str(e)); shutil.rmtree(p,ignore_errors=True)
+        GlowButton(w,"Create Project",create,True,width=240).pack(pady=18)
+        name.focus_set()
+
+    def write_json(self,path,data):
+        os.makedirs(os.path.dirname(path),exist_ok=True)
+        with open(path,"w",encoding="utf-8") as f:json.dump(data,f,indent=2)
+
+    def ai_panel(self):
+        if not self.project:return messagebox.showwarning("AI","Open a project first.")
+        p=os.path.join(self.project,".kclone","ai","config.json")
+        os.makedirs(os.path.dirname(p),exist_ok=True)
+        if not os.path.exists(p):self.write_json(p,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":"."})
+        w=tk.Toplevel(self);w.title("Kclone AI");w.geometry("680x560");w.configure(bg=BG)
+        self.label(w,"AI CONNECTION",20,FG,True).pack(anchor="w",padx=28,pady=(25,4));self.label(w,"The connection file now exists inside every project.",9,MUTED).pack(anchor="w",padx=28,pady=(0,18))
+        box=tk.Text(w,bg=PANEL,fg=FG,insertbackground=FG,relief="flat",font=("Consolas",10));box.pack(fill="both",expand=True,padx=28);box.insert("1.0",open(p,encoding="utf-8").read())
+        def save_ai():
+            try:self.write_text(p,box.get("1.0","end-1c"));self.log("AI config saved: "+p);messagebox.showinfo("AI","AI connection configuration saved.")
+            except Exception as e:messagebox.showerror("AI",str(e))
+        GlowButton(w,"Save AI Configuration",save_ai,True,width=230).pack(pady=14)
+
+    def write_text(self,path,text):
+        os.makedirs(os.path.dirname(path),exist_ok=True)
+        with open(path,"w",encoding="utf-8") as f:f.write(text)
+
+    def mcp_panel(self):
         if not self.project:return messagebox.showwarning("MCP","Open a project first.")
         p=os.path.join(self.project,".kclone","mcp","servers.json");os.makedirs(os.path.dirname(p),exist_ok=True)
-        if not os.path.exists(p):
-            with open(p,"w",encoding="utf-8") as f:json.dump({"projectAware":True,"mcpServers":{},"scope":"project"},f,indent=2)
-        messagebox.showinfo("MCP","Project-aware MCP config ready:\\n"+p)
-    def resources(self):
+        if not os.path.exists(p):self.write_json(p,{"version":1,"projectAware":True,"scope":"project","mcpServers":{},"capabilities":["workspace","files","assets","resources","build","tests","git","vm"]})
+        w=tk.Toplevel(self);w.title("MCP Manager");w.geometry("700x580");w.configure(bg=BG)
+        self.label(w,"MCP SERVER MANAGER",20,FG,True).pack(anchor="w",padx=28,pady=(25,4));self.label(w,"Edit the project-scoped JSON used to connect MCP servers.",9,MUTED).pack(anchor="w",padx=28,pady=(0,15))
+        box=tk.Text(w,bg=PANEL,fg=FG,insertbackground=FG,relief="flat",font=("Consolas",10));box.pack(fill="both",expand=True,padx=28);box.insert("1.0",open(p,encoding="utf-8").read())
+        def save_mcp():
+            try:json.loads(box.get("1.0","end-1c"));self.write_text(p,box.get("1.0","end-1c"));self.log("MCP config saved: "+p);messagebox.showinfo("MCP","MCP configuration saved.")
+            except Exception as e:messagebox.showerror("MCP","Invalid JSON: "+str(e))
+        GlowButton(w,"Save MCP Configuration",save_mcp,True,width=245).pack(pady=14)
+
+    def resources_panel(self):
         if not self.project:return messagebox.showwarning("Resources","Open a project first.")
-        p=os.path.join(self.project,"resources");os.makedirs(p,exist_ok=True)
-        messagebox.showinfo("Resources","Resource root ready:\\n"+p+"\\n\\nInstall SDKs, compilers, fonts, libraries and build assets here. The manifest keeps builds reproducible.")
-    def vm(self):
+        r=os.path.join(self.project,"resources");os.makedirs(r,exist_ok=True)
+        choice=messagebox.askyesnocancel("Resources","Add a local resource file?\n\nYes = choose file and copy it into resources.\nNo = open resources folder.\nCancel = close.")
+        if choice is True:
+            f=filedialog.askopenfilename()
+            if f:
+                shutil.copy2(f,os.path.join(r,os.path.basename(f)));self.log("Installed resource: "+os.path.basename(f));self.populate_tree()
+        elif choice is False:
+            try:
+                if os.name=="nt":os.startfile(r)
+                elif platform.system()=="Darwin":subprocess.Popen(["open",r])
+                else:subprocess.Popen(["xdg-open",r])
+            except Exception:pass
+
+    def find_qemu(self):
+        names=["qemu-system-x86_64","qemu-system-x86_64.exe"]
+        for n in names:
+            p=shutil.which(n)
+            if p:return p
+        if os.name=="nt":
+            for p in [r"C:\Program Files\qemu\qemu-system-x86_64.exe",r"C:\Program Files\QEMU\qemu-system-x86_64.exe",r"C:\ProgramData\chocolatey\bin\qemu-system-x86_64.exe"]:
+                if os.path.exists(p):return p
+        return None
+
+    def install_qemu(self):
+        if os.name=="nt":
+            cmd=["winget","install","-e","--id","SoftwareFreedomConservancy.QEMU","--accept-source-agreements","--accept-package-agreements"]
+        elif shutil.which("brew"):
+            cmd=["brew","install","qemu"]
+        elif shutil.which("apt-get"):
+            cmd=["sudo","apt-get","update"]
+            subprocess.Popen(cmd).wait()
+            cmd=["sudo","apt-get","install","-y","qemu-system-x86"]
+        else:
+            messagebox.showinfo("VM","Install QEMU with your OS package manager, then restart Kclone.");return
+        self.log("Installing QEMU...")
+        def run():
+            try:
+                r=subprocess.run(cmd,capture_output=True,text=True)
+                self.log(r.stdout[-1500:] if r.stdout else r.stderr[-1500:])
+                self.after(0,lambda:messagebox.showinfo("VM","QEMU installation finished. Reopen VM / OS Startup."))
+            except Exception as e:self.after(0,lambda:messagebox.showerror("VM",str(e)))
+        threading.Thread(target=run,daemon=True).start()
+
+    def vm_panel(self):
         if not self.project:return messagebox.showwarning("VM","Open an OS project first.")
-        w=tk.Toplevel(self);w.title("VM / OS Startup");w.geometry("560x460");w.configure(bg=BG)
-        tk.Label(w,text="OS Virtual Machine",bg=BG,fg=FG,font=("Segoe UI",18,"bold")).pack(anchor="w",padx=25,pady=(22,5))
-        tk.Label(w,text="QEMU profile: 4 CPU / 4 GB RAM / 32 GB disk, virtio graphics and optional VirGL 3D.",bg=BG,fg=MUTED,wraplength=500,justify="left").pack(anchor="w",padx=25,pady=(0,15))
-        form=ttk.Frame(w);form.pack(fill="x",padx=25);vs={}
-        for label,key,default,hi in [("RAM (MB)","memory_mb",4096,32768),("CPU cores","cpus",4,32),("Disk (GB)","disk_gb",32,512)]:
-            ttk.Label(form,text=label).pack(anchor="w");v=tk.IntVar(value=int(self.c["vm"].get(key,default)));vs[key]=v;ttk.Spinbox(form,from_=1,to=hi,textvariable=v).pack(fill="x",pady=(2,8))
-        a=tk.BooleanVar(value=True);ttk.Checkbutton(form,text="Enable 3D acceleration (virtio-gpu / VirGL when supported)",variable=a).pack(anchor="w")
-        q=shutil.which("qemu-system-x86_64");tk.Label(w,text=("QEMU: "+q) if q else "QEMU not found — install QEMU and restart Kclone.",bg=BG,fg="#8fd694" if q else "#e88",wraplength=500,justify="left").pack(anchor="w",padx=25,pady=12)
+        q=self.find_qemu()
+        w=tk.Toplevel(self);w.title("Kclone OS Runtime");w.geometry("700x650");w.configure(bg=BG)
+        self.label(w,"OS RUNTIME",22,FG,True).pack(anchor="w",padx=30,pady=(26,4))
+        self.label(w,"Boot an ISO with hardware acceleration when the host supports it.",9,MUTED).pack(anchor="w",padx=30,pady=(0,18))
+        stat="READY — "+q if q else "QEMU BACKEND NOT INSTALLED"
+        self.label(w,stat,9,GREEN if q else RED,True).pack(anchor="w",padx=30,pady=(0,15))
+        cfg=tk.Frame(w,bg=PANEL,highlightbackground=BORDER,highlightthickness=1);cfg.pack(fill="x",padx=30)
+        values={}
+        for title,key,default,hi in [("MEMORY","memory_mb",6144,32768),("CPU CORES","cpus",6,32),("DISK TARGET (GB)","disk_gb",48,512)]:
+            row=tk.Frame(cfg,bg=PANEL);row.pack(fill="x",padx=18,pady=8);self.label(row,title,9,MUTED,True).pack(side="left")
+            e=tk.Entry(row,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat",width=10);e.insert(0,str(self.cfg["vm"].get(key,default)));e.pack(side="right");values[key]=e
+        accel=tk.BooleanVar(value=True);tk.Checkbutton(cfg,text="Enable 3D / VirGL (virtio-gpu-gl)",variable=accel,bg=PANEL,fg=FG,selectcolor=PANEL2,activebackground=PANEL,activeforeground=FG).pack(anchor="w",padx=18,pady=(3,14))
+        actions=tk.Frame(w,bg=BG);actions.pack(fill="x",padx=30,pady=18)
         def start():
-            if not q:return messagebox.showerror("VM","QEMU is not installed or not on PATH.")
-            iso=filedialog.askopenfilename(title="Select bootable ISO",initialdir=os.path.join(self.project,"artifacts"),filetypes=[("ISO","*.iso"),("All files","*.*")])
+            q2=self.find_qemu()
+            if not q2:
+                messagebox.showwarning("QEMU required","Kclone cannot emulate a real OS without a VM backend. Click Install QEMU once; Kclone will set it up automatically where supported.")
+                return
+            iso=None
+            if os.path.isdir(os.path.join(self.project,"artifacts")):
+                candidates=[os.path.join(self.project,"artifacts",x) for x in os.listdir(os.path.join(self.project,"artifacts")) if x.lower().endswith(".iso")]
+                if candidates:iso=sorted(candidates,key=os.path.getmtime)[-1]
+            if not iso:iso=filedialog.askopenfilename(title="Choose bootable ISO",filetypes=[("Bootable ISO","*.iso")],initialdir=os.path.join(self.project,"artifacts"))
             if not iso:return
-            self.c["vm"]={"memory_mb":vs["memory_mb"].get(),"cpus":vs["cpus"].get(),"disk_gb":vs["disk_gb"].get(),"enable_3d":a.get()};save(self.c)
-            cmd=[q,"-m",str(vs["memory_mb"].get()),"-smp",str(vs["cpus"].get()),"-drive",f"file={iso},media=cdrom,readonly=on","-boot","d","-device","virtio-vga"]
-            if a.get():cmd+=["-display","gtk,gl=on" if platform.system()=="Linux" else "sdl,gl=on"]
-            self.log("VM: "+" ".join(cmd))
-            try:subprocess.Popen(cmd);w.destroy()
+            mem=int(values["memory_mb"].get()); cpus=int(values["cpus"].get()); disk=int(values["disk_gb"].get())
+            self.cfg["vm"]={"memory_mb":mem,"cpus":cpus,"disk_gb":disk,"enable_3d":accel.get()};save_config(self.cfg)
+            cmd=[q2,"-accel","auto","-machine","q35","-m",str(mem),"-smp",str(cpus),"-drive",f"file={iso},media=cdrom,readonly=on","-boot","d","-device","virtio-net-pci,netdev=n0","-netdev","user,id=n0","-device","virtio-gpu-gl,hostmem=4G,blob=true"]
+            if accel.get():cmd += ["-display","gtk,gl=on" if platform.system()=="Linux" else "sdl,gl=on"]
+            else:cmd[-1]="virtio-gpu"
+            self.log("Starting accelerated VM: "+" ".join(cmd))
+            try:self.vm_proc=subprocess.Popen(cmd);w.destroy()
             except Exception as e:messagebox.showerror("VM",str(e))
-        ttk.Button(w,text="Start VM",command=start,style="Accent.TButton").pack(fill="x",padx=25,pady=8);ttk.Button(w,text="Close",command=w.destroy).pack(fill="x",padx=25)
-    def settings(self):messagebox.showinfo("Settings","Dark UI enabled.\\nWorkspace: "+self.workspace+"\\nVM default: 4 CPU / 4 GB RAM / 32 GB disk / 3D enabled.")
-if __name__=="__main__":Kclone().mainloop()
+        if not q:GlowButton(actions,"Install QEMU",self.install_qemu,True,width=180).pack(side="left",padx=4)
+        GlowButton(actions,"Start OS",start,True,width=180).pack(side="left",padx=4)
+        GlowButton(actions,"Close",w.destroy,width=120).pack(side="right",padx=4)
+        self.label(w,"Recommended guest support: virtio-gpu/DRM in the OS kernel. VirGL 3D depends on host graphics support.",8,MUTED).pack(anchor="w",padx=30,pady=8)
+
+    def choose_workspace(self):
+        p=filedialog.askdirectory(initialdir=self.workspace)
+        if p:self.workspace=p;self.cfg["workspace"]=p;save_config(self.cfg);self.refresh_projects();self.log("Workspace changed.")
+
+    def settings(self):
+        messagebox.showinfo("Kclone","Workspace: "+self.workspace+"\nAI config: per-project .kclone/ai/config.json\nMCP config: per-project .kclone/mcp/servers.json\nVM: QEMU + virtio-gpu-gl/VirGL when available.")
+
+    def close(self):
+        try:
+            if self.vm_proc and self.vm_proc.poll() is None:self.vm_proc.terminate()
+        except Exception:pass
+        self.destroy()
+
+if __name__=="__main__": Kclone().mainloop()
