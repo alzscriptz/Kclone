@@ -1,4 +1,4 @@
-name: Kclone Windows Release
+name: Kclone Windows EXE Release
 
 on:
   push:
