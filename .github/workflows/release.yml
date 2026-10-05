@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: kclone-windows-package
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
