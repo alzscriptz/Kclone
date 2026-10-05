@@ -2,6 +2,23 @@
   "target": "iso",
   "output": "artifacts",
   "asset_root": "assets",
-  "asset_types": ["png", "jpg", "jpeg", "svg", "ico", "webp"],
-  "pipeline": ["validate-tree", "validate-assets", "build-image", "boot-test"]
+  "resource_root": "resources",
+  "boot_root": "boot",
+  "iso_stage": "build/iso-root",
+  "asset_types": ["png", "jpg", "jpeg", "svg", "ico", "webp", "ttf", "otf", "wav", "ogg"],
+  "required_checks": ["KCLONE.json", "resources/manifest.json", "boot/"],
+  "pipeline": [
+    "validate-tree",
+    "validate-assets",
+    "stage-resources",
+    "build-image",
+    "verify-iso",
+    "boot-test"
+  ],
+  "iso_tools": ["grub-mkrescue", "xorriso", "mkisofs"],
+  "artifact_policy": {
+    "keep_iso": true,
+    "keep_logs": true,
+    "write_manifest": true
+  }
 }
