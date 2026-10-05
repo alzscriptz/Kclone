@@ -9,11 +9,3 @@ PyInstaller.__main__.run([
     "--add-data=templates/os/build.py;templates/os",
     "--clean",
 ])
-
-PyInstaller.__main__.run([
-    "kclone_mcp_server.py",
-    "--onefile",
-    "--console",
-    "--name=Kclone-MCP",
-    "--clean",
-])
