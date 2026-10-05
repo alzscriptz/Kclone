@@ -253,6 +253,9 @@ class Kclone(tk.Tk):
                 os.makedirs(p)
                 folders=["src","assets","resources","build","artifacts","docs"] if template.get()!="OS / ISO" else ["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","docs","artifacts"]
                 for d in folders:os.makedirs(os.path.join(p,d),exist_ok=True)
+                if template.get()=="OS / ISO":
+                    template_src=os.path.join(getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__))),"templates","os","build.py")
+                    if os.path.isfile(template_src):shutil.copy2(template_src,os.path.join(p,"build","build.py"))
                 k={"name":n,"type":"os" if template.get()=="OS / ISO" else "application","version":4,"ai_project_aware":True,"mcp_project_aware":True,"targets":["iso","exe","apk","aab"],"workspace":{"root":".","asset_tree":"assets","resource_tree":"resources","build_tree":"build","artifact_tree":"artifacts"},"ai":{"config":".kclone/ai/config.json"},"mcp":{"config":".kclone/mcp/servers.json"},"vm":{"memory_mb":6144,"cpus":6,"disk_gb":48,"enable_3d":True}}
                 self.write_json(os.path.join(p,"KCLONE.json"),k)
                 self.write_json(os.path.join(p,"resources","manifest.json"),{"version":1,"resources":[],"install_root":"resources","auto_include":True})
