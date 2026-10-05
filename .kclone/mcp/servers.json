@@ -1,6 +1,16 @@
 {
+  "version": 1,
   "projectAware": true,
-  "mcpServers": {},
   "scope": "project",
-  "capabilities": ["workspace", "files", "assets", "build", "tests", "git"]
+  "mcpServers": {},
+  "capabilities": [
+    "workspace",
+    "files",
+    "assets",
+    "resources",
+    "build",
+    "tests",
+    "git",
+    "vm"
+  ]
 }
