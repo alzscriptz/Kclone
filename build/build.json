@@ -1,0 +1,7 @@
+{
+  "target": "iso",
+  "output": "artifacts",
+  "asset_root": "assets",
+  "asset_types": ["png", "jpg", "jpeg", "svg", "ico", "webp"],
+  "pipeline": ["validate-tree", "validate-assets", "build-image", "boot-test"]
+}
