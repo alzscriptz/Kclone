@@ -1,5 +1,5 @@
-import json, os, platform, shutil, subprocess, threading, time, tkinter as tk
-from tkinter import filedialog, messagebox
+import json, os, platform, shutil, subprocess, threading, time, sys, tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 
 ROOT=os.path.expanduser("~/.kclone")
 CONFIG=os.path.join(ROOT,"config.json")
@@ -78,7 +78,7 @@ class Kclone(tk.Tk):
         editor=tk.Frame(split,bg="#0a0c10",highlightbackground=BORDER,highlightthickness=1); editor.pack(side="right",fill="both",expand=True,padx=(6,0))
         self.label(explorer,"PROJECT EXPLORER",9,MUTED,True).pack(anchor="w",padx=14,pady=(12,7))
         self.tree=tk.Listbox(explorer,bg=PANEL,fg=FG,selectbackground="#18283b",selectforeground=BLUE2,relief="flat",bd=0,highlightthickness=0,font=("Consolas",10),activestyle="none")
-        self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.tree.bind("<Double-Button-1>",lambda e:self.tree_open())
+        self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.tree.bind("<Double-Button-1>",lambda e:self.tree_open()); self.tree.bind("<Button-3>",self.tree_menu)
         self.filebar=tk.Frame(editor,bg=PANEL2,height=40); self.filebar.pack(fill="x")
         self.file_label=self.label(self.filebar,"  Welcome",9,MUTED); self.file_label.pack(side="left",fill="x",expand=True)
         GlowButton(self.filebar,"Save",self.save_file,width=85,bg=PANEL2).pack(side="right",padx=5,pady=4)
@@ -89,7 +89,7 @@ class Kclone(tk.Tk):
         self.card(self.inspector,"AI", "Project-aware AI connection",self.ai_panel)
         self.card(self.inspector,"MCP","Tools, servers and permissions",self.mcp_panel)
         self.card(self.inspector,"RESOURCES","Assets, SDKs and toolchains",self.resources_panel)
-        self.card(self.inspector,"VM / OS","Boot, acceleration and testing",self.vm_panel)
+        self.card(self.inspector,"BUILD / ISO","Validate, build and inspect artifacts",self.build_panel); self.card(self.inspector,"VM / OS","Boot, disks, acceleration and testing",self.vm_panel)
 
         bottom=tk.Frame(self,bg="#050608",height=145,highlightbackground=BORDER,highlightthickness=1); bottom.pack(fill="x",padx=18,pady=(10,16))
         self.label(bottom,"OUTPUT",9,MUTED,True).pack(anchor="w",padx=12,pady=(8,2))
@@ -121,7 +121,33 @@ class Kclone(tk.Tk):
         if os.path.isdir(p): self.open_project(p)
 
     def open_project(self,p):
-        self.project=os.path.abspath(p); self.project_title.config(text=os.path.basename(p)); self.status.config(text="● Project loaded",fg=GREEN); self.populate_tree(); self.log("Opened "+self.project)
+        self.project=os.path.abspath(p); self.project_title.config(text=os.path.basename(p)); self.status.config(text="● Project loaded",fg=GREEN); self.ensure_project_files(); self.populate_tree(); self.log("Opened "+self.project)
+
+    def read_json(self,path,default=None):
+        try:
+            with open(path,encoding="utf-8") as f:return json.load(f)
+        except Exception:return default
+
+    def mcp_runtime(self):
+        if getattr(sys,"frozen",False):
+            exe=os.path.join(os.path.dirname(sys.executable),"Kclone-MCP.exe" if os.name=="nt" else "Kclone-MCP")
+            if os.path.isfile(exe):return exe,[]
+        server=os.path.join(os.path.dirname(os.path.abspath(__file__)),"kclone_mcp_server.py")
+        if os.path.isfile(server):return sys.executable,[server]
+        py=shutil.which("python") or shutil.which("python3")
+        return (py,["kclone_mcp_server.py"]) if py else (None,None)
+
+    def write_default_mcp(self,path):
+        command,args=self.mcp_runtime()
+        if not command:raise RuntimeError("Kclone-MCP runtime is missing.")
+        self.write_json(path,{"version":1,"projectAware":True,"scope":"project","mcpServers":{"kclone-workspace":{"transport":"stdio","command":command,"args":args+["--root",self.project],"enabled":True}},"capabilities":["tools","resources","workspace","files","assets","build","tests","git","vm"]})
+
+    def ensure_project_files(self):
+        if not self.project:return
+        os.makedirs(os.path.join(self.project,"resources"),exist_ok=True)
+        os.makedirs(os.path.join(self.project,"artifacts"),exist_ok=True)
+        mp=os.path.join(self.project,".kclone","mcp","servers.json")
+        if not self.read_json(mp,{}).get("mcpServers"):self.write_default_mcp(mp)
 
     def populate_tree(self):
         self.tree.delete(0,"end")
@@ -136,28 +162,56 @@ class Kclone(tk.Tk):
                 if os.path.isdir(f):walk(f,depth+1)
         self.tree.insert("end","▾ "+os.path.basename(self.project)); walk(self.project,1)
 
-    def tree_open(self):
-        idx=self.tree.curselection()
-        if not idx or not self.project:return
-        shown=self.tree.get(idx[0]).strip()
-        if shown.startswith(("▾ ","▸ ")):return
-        rel=shown[2:] if shown.startswith("• ") else shown
-        # Resolve displayed relative path by walking from indentation.
-        line=self.tree.get(idx[0]); depth=(len(line)-len(line.lstrip(" ")))//3
-        rel=shown
-        for i in range(idx[0]-1,-1,-1):
-            line2=self.tree.get(i); d=(len(line2)-len(line2.lstrip(" ")))//3
-            name=line2.strip()
-            if d<depth and name.startswith(("▾ ","▸ ")):
-                base=name[2:]; rel=os.path.join(base,rel); depth=d; 
-                if d==0:break
-        path=os.path.join(self.project,rel.replace("\\","/"))
-        if os.path.isfile(path):
-            try:
-                if os.path.getsize(path)>3000000: raise ValueError("File is too large for the editor.")
-                with open(path,encoding="utf-8") as f:data=f.read()
-                self.current_file=path; self.file_label.config(text="  "+os.path.relpath(path,self.project)); self.editor.delete("1.0","end"); self.editor.insert("1.0",data)
-            except Exception as e:self.log(str(e))
+    def tree_path(self,idx):
+        stack=[]
+        for i in range(idx+1):
+            line=self.tree.get(i);depth=(len(line)-len(line.lstrip(" ")))//3;name=line.strip()[2:]
+            if depth==0:stack=[name]
+            else:stack=stack[:depth]+[name]
+        return os.path.join(self.project,*stack[1:])
+
+    def tree_menu(self,event):
+        idx=self.tree.nearest(event.y);self.tree.selection_clear(0,"end");self.tree.selection_set(idx);path=self.tree_path(idx)
+        menu=tk.Menu(self,tearoff=0,bg=PANEL2,fg=FG,activebackground="#28527f",activeforeground=FG)
+        if os.path.isdir(path):
+            menu.add_command(label="Run OS",command=self.vm_panel);menu.add_command(label="Build ISO",command=self.build_panel);menu.add_separator()
+        menu.add_command(label="Open",command=self.tree_open)
+        menu.add_command(label="Rename",command=lambda:self.rename_path(path))
+        menu.add_command(label="Copy Path",command=lambda:self.copy_path(path))
+        menu.add_command(label="New File",command=lambda:self.new_path(path,False))
+        menu.add_command(label="New Folder",command=lambda:self.new_path(path,True))
+        menu.add_command(label="Copy",command=lambda:self.copy_path_to(path))
+        menu.add_separator();menu.add_command(label="Remove",command=lambda:self.remove_path(path));menu.tk_popup(event.x_root,event.y_root)
+
+    def rename_path(self,path):
+        name=simpledialog.askstring("Rename","New name:",initialvalue=os.path.basename(path),parent=self)
+        if name and safe_name(name):os.rename(path,os.path.join(os.path.dirname(path),name));self.populate_tree()
+
+    def copy_path(self,path):
+        self.clipboard_clear();self.clipboard_append(path);self.log("Copied path.")
+
+    def copy_path_to(self,path):
+        target=filedialog.askdirectory(title="Copy into...")
+        if not target:return
+        dest=os.path.join(target,os.path.basename(path))
+        if os.path.isdir(path):shutil.copytree(path,dest)
+        else:shutil.copy2(path,dest)
+
+    def new_path(self,path,is_dir):
+        if os.path.isfile(path):path=os.path.dirname(path)
+        name=simpledialog.askstring("Create","Name:",parent=self)
+        if not name or not safe_name(name):return
+        target=os.path.join(path,name)
+        if is_dir:os.makedirs(target,exist_ok=True)
+        else:self.write_text(target,"")
+        self.populate_tree()
+
+    def remove_path(self,path):
+        if path==self.project:return
+        if not messagebox.askyesno("Remove","Remove this path permanently?"):return
+        if os.path.isdir(path):shutil.rmtree(path)
+        else:os.remove(path)
+        self.populate_tree()
 
     def save_file(self):
         if not self.current_file:return
