@@ -1,0 +1,16 @@
+{
+  "name": "Kclone",
+  "type": "development-platform",
+  "version": 2,
+  "private": true,
+  "ai_project_aware": true,
+  "mcp_project_aware": true,
+  "workspace": {
+    "root_tree": ".",
+    "local_tree": true,
+    "asset_tree": "assets",
+    "build_tree": "build",
+    "artifact_tree": "artifacts"
+  },
+  "targets": ["exe", "apk", "aab", "iso"]
+}
