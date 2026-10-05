@@ -2,8 +2,17 @@
   "version": 1,
   "projectAware": true,
   "scope": "project",
-  "mcpServers": {},
+  "mcpServers": {
+    "kclone-workspace": {
+      "transport": "stdio",
+      "command": "python",
+      "args": ["kclone_mcp_server.py", "--root", "."],
+      "enabled": true
+    }
+  },
   "capabilities": [
+    "tools",
+    "resources",
     "workspace",
     "files",
     "assets",
