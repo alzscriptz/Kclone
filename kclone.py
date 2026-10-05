@@ -141,8 +141,7 @@ class Kclone(tk.Tk):
 
     def mcp_runtime(self):
         if getattr(sys,"frozen",False):
-            exe=os.path.join(os.path.dirname(sys.executable),"Kclone-MCP.exe" if os.name=="nt" else "Kclone-MCP")
-            if os.path.isfile(exe):return exe,[]
+            return sys.executable,["--mcp-server"]
         server=os.path.join(os.path.dirname(os.path.abspath(__file__)),"kclone_mcp_server.py")
         if os.path.isfile(server):return sys.executable,[server]
         py=shutil.which("python") or shutil.which("python3")
@@ -161,7 +160,13 @@ class Kclone(tk.Tk):
         if not os.path.exists(ai):
             self.write_json(ai,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
         mp=os.path.join(self.project,".kclone","mcp","servers.json")
-        if not self.read_json(mp,{}).get("mcpServers"):self.write_default_mcp(mp)
+        mcfg=self.read_json(mp,{})
+        if not mcfg.get("mcpServers"):
+            self.write_default_mcp(mp)
+        else:
+            first=next(iter(mcfg["mcpServers"].values()))
+            if "Kclone-MCP" in str(first.get("command","")):
+                self.write_default_mcp(mp)
 
     def populate_tree(self):
         self.tree.delete(0,"end")
@@ -260,7 +265,8 @@ class Kclone(tk.Tk):
                 self.write_json(os.path.join(p,"KCLONE.json"),k)
                 self.write_json(os.path.join(p,"resources","manifest.json"),{"version":1,"resources":[],"install_root":"resources","auto_include":True})
                 self.write_json(os.path.join(p,".kclone","ai","config.json"),{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
-                self.write_json(os.path.join(p,".kclone","mcp","servers.json"),{"version":1,"projectAware":True,"scope":"project","mcpServers":{},"capabilities":["workspace","files","assets","resources","build","tests","git","vm"]})
+                command,args=self.mcp_runtime()
+                self.write_json(os.path.join(p,".kclone","mcp","servers.json"),{"version":1,"projectAware":True,"scope":"project","mcpServers":{"kclone-workspace":{"transport":"stdio","command":command,"args":args+["--root",p],"enabled":True}},"capabilities":["tools","resources","workspace","files","assets","resources","build","tests","git","vm"]})
                 self.write_json(os.path.join(p,".kclone","vm.json"),{"backend":"qemu","memory_mb":6144,"cpus":6,"disk_gb":48,"graphics":{"device":"virtio-gpu-gl","3d":True,"hostmem":"4G"},"acceleration":{"auto":True,"kvm":True,"whpx":True,"hvf":True}})
                 with open(os.path.join(p,".gitignore"),"w",encoding="utf-8") as f:f.write(".venv/\\n__pycache__/\\n*.pyc\\n")
                 rr=subprocess.run(["git","init",p],capture_output=True,text=True)
@@ -570,4 +576,10 @@ class Kclone(tk.Tk):
         except Exception:pass
         self.destroy()
 
-if __name__=="__main__": Kclone().mainloop()
+if __name__=="__main__":
+    if "--mcp-server" in sys.argv:
+        import runpy
+        server=os.path.join(getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__))),"kclone_mcp_server.py")
+        runpy.run_path(server,run_name="__main__")
+    else:
+        Kclone().mainloop()
