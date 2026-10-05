@@ -1,0 +1,27 @@
+{
+  "enabled": true,
+  "provider": "openai-compatible",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-5",
+  "api_key_env": "KCLONE_AI_API_KEY",
+  "project_root": ".",
+  "permissions": {
+    "read": true,
+    "write": true,
+    "delete": true,
+    "build": true,
+    "git": true,
+    "mcp": true,
+    "resources": true,
+    "vm": true
+  },
+  "context": [
+    "KCLONE.json",
+    ".kclone/ai/config.json",
+    ".kclone/mcp/servers.json",
+    "resources/",
+    "assets/",
+    "build/",
+    "artifacts/"
+  ]
+}
