@@ -304,18 +304,49 @@ class Kclone(tk.Tk):
         ok,msg=self.ai_call(cfg,[{"role":"system","content":"You are Kclone's project-aware assistant. The authorized project root is "+self.project+"."},{"role":"user","content":prompt}])
         text=msg if isinstance(msg,str) else msg.get("content","")
         self.after(0,lambda:say("KCLONE AI",text))
+    def mcp_connect(self,name,spec):
+        if not hasattr(self,"mcp_clients"):self.mcp_clients={}
+        if name in self.mcp_clients:return self.mcp_clients[name]
+        cmd=[spec["command"]]+spec.get("args",[]);env=os.environ.copy();env["KCLONE_PROJECT_ROOT"]=self.project
+        proc=subprocess.Popen(cmd,cwd=self.project,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env)
+        def rpc(method,params=None,rid=1):
+            proc.stdin.write(json.dumps({"jsonrpc":"2.0","id":rid,"method":method,"params":params or {}})+"\n");proc.stdin.flush()
+            while True:
+                line=proc.stdout.readline()
+                if not line:raise RuntimeError("MCP server closed stdout")
+                obj=json.loads(line)
+                if obj.get("id")==rid:return obj
+        rpc("initialize",{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"Kclone","version":"1.0"}},1)
+        proc.stdin.write(json.dumps({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})+"\n");proc.stdin.flush()
+        tools=rpc("tools/list",{},2).get("result",{}).get("tools",[])
+        self.mcp_clients[name]={"process":proc,"rpc":rpc,"tools":tools};return self.mcp_clients[name]
+
     def mcp_panel(self):
         if not self.project:return messagebox.showwarning("MCP","Open a project first.")
-        p=os.path.join(self.project,".kclone","mcp","servers.json");os.makedirs(os.path.dirname(p),exist_ok=True)
-        if not os.path.exists(p):self.write_json(p,{"version":1,"projectAware":True,"scope":"project","mcpServers":{},"capabilities":["workspace","files","assets","resources","build","tests","git","vm"]})
-        w=tk.Toplevel(self);w.title("MCP Manager");w.geometry("700x580");w.configure(bg=BG)
-        self.label(w,"MCP SERVER MANAGER",20,FG,True).pack(anchor="w",padx=28,pady=(25,4));self.label(w,"Edit the project-scoped JSON used to connect MCP servers.",9,MUTED).pack(anchor="w",padx=28,pady=(0,15))
-        box=tk.Text(w,bg=PANEL,fg=FG,insertbackground=FG,relief="flat",font=("Consolas",10));box.pack(fill="both",expand=True,padx=28);box.insert("1.0",open(p,encoding="utf-8").read())
-        def save_mcp():
-            try:json.loads(box.get("1.0","end-1c"));self.write_text(p,box.get("1.0","end-1c"));self.log("MCP config saved: "+p);messagebox.showinfo("MCP","MCP configuration saved.")
-            except Exception as e:messagebox.showerror("MCP","Invalid JSON: "+str(e))
-        GlowButton(w,"Save MCP Configuration",save_mcp,True,width=245).pack(pady=14)
-
+        self.ensure_project_files();path=os.path.join(self.project,".kclone","mcp","servers.json");cfg=self.read_json(path,{})
+        w=tk.Toplevel(self);w.title("MCP Control Center");w.geometry("950x650");w.configure(bg=BG)
+        self.label(w,"MCP SERVERS",22,FG,True).pack(anchor="w",padx=25,pady=(22,2));self.label(w,"Real stdio JSON-RPC servers. Add servers, start them, and inspect their tools.",9,MUTED).pack(anchor="w",padx=25,pady=(0,12))
+        body=tk.Frame(w,bg=BG);body.pack(fill="both",expand=True,padx=25)
+        left=tk.Frame(body,bg=PANEL);left.pack(side="left",fill="y",padx=(0,8));right=tk.Frame(body,bg=PANEL);right.pack(side="right",fill="both",expand=True,padx=(8,0))
+        lb=tk.Listbox(left,bg=PANEL,fg=FG,selectbackground="#214a78",relief="flat",font=("Segoe UI",10));lb.pack(fill="both",expand=True,padx=8,pady=8)
+        out=tk.Text(right,bg="#090c11",fg=FG,relief="flat",font=("Consolas",10));out.pack(fill="both",expand=True,padx=8,pady=8)
+        def refresh():
+            lb.delete(0,"end")
+            for n,s in cfg.get("mcpServers",{}).items():lb.insert("end",("● " if s.get("enabled",True) else "○ ")+n)
+        refresh()
+        def add():
+            name=simpledialog.askstring("MCP Server","Name:",parent=w);command=simpledialog.askstring("MCP Server","Command:",initialvalue="python",parent=w);args=simpledialog.askstring("MCP Server","Arguments:",initialvalue="",parent=w)
+            if name and command:
+                cfg.setdefault("mcpServers",{})[name]={"transport":"stdio","command":command,"args":args.split() if args else [],"enabled":True};self.write_json(path,cfg);refresh()
+        def start():
+            s=lb.curselection()
+            if not s:return
+            name=lb.get(s[0]).replace("● ","").replace("○ ","")
+            try:
+                client=self.mcp_connect(name,cfg["mcpServers"][name]);out.delete("1.0","end");out.insert("1.0",json.dumps(client["tools"],indent=2));self.log("MCP connected: "+name)
+            except Exception as e:messagebox.showerror("MCP",str(e))
+        bar=tk.Frame(left,bg=PANEL);bar.pack(fill="x",padx=8,pady=8)
+        GlowButton(bar,"Add",add,True,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Start",start,False,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Save",lambda:self.write_json(path,cfg),False,90,bg=PANEL).pack(side="left",padx=2)
     def resources_panel(self):
         if not self.project:return messagebox.showwarning("Resources","Open a project first.")
         r=os.path.join(self.project,"resources");os.makedirs(r,exist_ok=True)
