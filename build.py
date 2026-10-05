@@ -5,5 +5,14 @@ PyInstaller.__main__.run([
     "--onefile",
     "--windowed",
     "--name=Kclone",
+    "--add-data=kclone_mcp_server.py;.",
+    "--clean",
+])
+
+PyInstaller.__main__.run([
+    "kclone_mcp_server.py",
+    "--onefile",
+    "--console",
+    "--name=Kclone-MCP",
     "--clean",
 ])
