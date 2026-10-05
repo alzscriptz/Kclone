@@ -143,7 +143,7 @@ class Kclone(tk.Tk):
         if shown.startswith(("▾ ","▸ ")):return
         rel=shown[2:] if shown.startswith("• ") else shown
         # Resolve displayed relative path by walking from indentation.
-        line=self.tree.get(idx[0]); depth=(len(line)-len(line.lstrip(" "))//3)
+        line=self.tree.get(idx[0]); depth=(len(line)-len(line.lstrip(" ")))//3
         rel=shown
         for i in range(idx[0]-1,-1,-1):
             line2=self.tree.get(i); d=(len(line2)-len(line2.lstrip(" ")))//3
