@@ -262,21 +262,48 @@ class Kclone(tk.Tk):
 
     def ai_panel(self):
         if not self.project:return messagebox.showwarning("AI","Open a project first.")
-        p=os.path.join(self.project,".kclone","ai","config.json")
-        os.makedirs(os.path.dirname(p),exist_ok=True)
-        if not os.path.exists(p):self.write_json(p,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":"."})
-        w=tk.Toplevel(self);w.title("Kclone AI");w.geometry("680x560");w.configure(bg=BG)
-        self.label(w,"AI CONNECTION",20,FG,True).pack(anchor="w",padx=28,pady=(25,4));self.label(w,"The connection file now exists inside every project.",9,MUTED).pack(anchor="w",padx=28,pady=(0,18))
-        box=tk.Text(w,bg=PANEL,fg=FG,insertbackground=FG,relief="flat",font=("Consolas",10));box.pack(fill="both",expand=True,padx=28);box.insert("1.0",open(p,encoding="utf-8").read())
-        def save_ai():
-            try:self.write_text(p,box.get("1.0","end-1c"));self.log("AI config saved: "+p);messagebox.showinfo("AI","AI connection configuration saved.")
-            except Exception as e:messagebox.showerror("AI",str(e))
-        GlowButton(w,"Save AI Configuration",save_ai,True,width=230).pack(pady=14)
+        self.ensure_project_files();path=os.path.join(self.project,".kclone","ai","config.json");cfg=self.read_json(path,{})
+        w=tk.Toplevel(self);w.title("Kclone AI");w.geometry("900x700");w.configure(bg=BG)
+        self.label(w,"AI CONNECTION",22,FG,True).pack(anchor="w",padx=25,pady=(22,2))
+        self.label(w,"Configure and test the project AI endpoint. The API key is read from an environment variable.",9,MUTED).pack(anchor="w",padx=25,pady=(0,12))
+        form=tk.Frame(w,bg=BG);form.pack(fill="x",padx=25);entries={}
+        for title,key in [("BASE URL","base_url"),("MODEL","model"),("API KEY ENV","api_key_env")]:
+            col=tk.Frame(form,bg=BG);col.pack(side="left",fill="x",expand=True,padx=4);self.label(col,title,8,MUTED,True).pack(anchor="w")
+            e=tk.Entry(col,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat");e.insert(0,cfg.get(key,""));e.pack(fill="x",ipady=7);entries[key]=e
+        self.label(w,"CHAT",9,MUTED,True).pack(anchor="w",padx=25,pady=(15,4))
+        chat=tk.Text(w,bg=PANEL,fg=FG,relief="flat",font=("Consolas",10),state="disabled");chat.pack(fill="both",expand=True,padx=25)
+        row=tk.Frame(w,bg=BG);row.pack(fill="x",padx=25,pady=10);prompt=tk.Entry(row,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat");prompt.pack(side="left",fill="x",expand=True,ipady=9)
+        def say(role,text):
+            chat.configure(state="normal");chat.insert("end",f"{role}: {text}\n\n");chat.see("end");chat.configure(state="disabled")
+        def save_cfg():
+            cfg["base_url"]=entries["base_url"].get().strip().rstrip("/");cfg["model"]=entries["model"].get().strip();cfg["api_key_env"]=entries["api_key_env"].get().strip();self.write_json(path,cfg)
+        def test():
+            save_cfg();ok,msg=self.ai_call(cfg,[{"role":"system","content":"You are Kclone."},{"role":"user","content":"Reply only: Kclone AI connection OK."}]);say("SYSTEM",msg if isinstance(msg,str) else msg.get("content",""))
+        def send():
+            q=prompt.get().strip()
+            if not q:return
+            prompt.delete(0,"end");say("YOU",q);save_cfg()
+            threading.Thread(target=lambda:self.ai_chat_async(q,cfg,say),daemon=True).start()
+        GlowButton(row,"Test Connection",test,False,150,bg=BG).pack(side="right",padx=4);GlowButton(row,"Send",send,True,100,bg=BG).pack(side="right",padx=4);prompt.bind("<Return>",lambda e:send())
+        say("SYSTEM","Project AI is ready. Configure the environment variable before testing.")
 
-    def write_text(self,path,text):
-        os.makedirs(os.path.dirname(path),exist_ok=True)
-        with open(path,"w",encoding="utf-8") as f:f.write(text)
+    def ai_call(self,cfg,messages):
+        from urllib.request import Request,urlopen
+        from urllib.error import HTTPError
+        key=os.environ.get(cfg.get("api_key_env","KCLONE_AI_API_KEY"))
+        if not key:return False,"Missing API key environment variable: "+cfg.get("api_key_env","KCLONE_AI_API_KEY")
+        payload={"model":cfg.get("model","gpt-5"),"messages":messages}
+        req=Request(cfg.get("base_url","https://api.openai.com/v1").rstrip("/")+"/chat/completions",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json","Authorization":"Bearer "+key})
+        try:
+            with urlopen(req,timeout=120) as rr:obj=json.loads(rr.read().decode())
+            return True,obj["choices"][0]["message"]
+        except HTTPError as e:return False,e.read().decode(errors="replace")[:3000]
+        except Exception as e:return False,str(e)
 
+    def ai_chat_async(self,prompt,cfg,say):
+        ok,msg=self.ai_call(cfg,[{"role":"system","content":"You are Kclone's project-aware assistant. The authorized project root is "+self.project+"."},{"role":"user","content":prompt}])
+        text=msg if isinstance(msg,str) else msg.get("content","")
+        self.after(0,lambda:say("KCLONE AI",text))
     def mcp_panel(self):
         if not self.project:return messagebox.showwarning("MCP","Open a project first.")
         p=os.path.join(self.project,".kclone","mcp","servers.json");os.makedirs(os.path.dirname(p),exist_ok=True)
