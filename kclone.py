@@ -146,6 +146,9 @@ class Kclone(tk.Tk):
         if not self.project:return
         os.makedirs(os.path.join(self.project,"resources"),exist_ok=True)
         os.makedirs(os.path.join(self.project,"artifacts"),exist_ok=True)
+        ai=os.path.join(self.project,".kclone","ai","config.json")
+        if not os.path.exists(ai):
+            self.write_json(ai,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
         mp=os.path.join(self.project,".kclone","mcp","servers.json")
         if not self.read_json(mp,{}).get("mcpServers"):self.write_default_mcp(mp)
 
@@ -545,6 +548,9 @@ class Kclone(tk.Tk):
         GlowButton(w,"Save Settings",save,True,180,bg=BG).pack(pady=22)
 
     def close(self):
+        for client in getattr(self,"mcp_clients",{}).values():
+            try:client["process"].terminate()
+            except Exception:pass
         try:
             if self.vm_proc and self.vm_proc.poll() is None:self.vm_proc.terminate()
         except Exception:pass
