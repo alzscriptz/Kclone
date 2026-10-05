@@ -300,8 +300,70 @@ class Kclone(tk.Tk):
         except HTTPError as e:return False,e.read().decode(errors="replace")[:3000]
         except Exception as e:return False,str(e)
 
+    def mcp_tools_for_ai(self):
+        tools=[];cfg=self.read_json(os.path.join(self.project,".kclone","mcp","servers.json"),{})
+        for name,spec in cfg.get("mcpServers",{}).items():
+            if not spec.get("enabled",True):continue
+            try:
+                client=self.mcp_connect(name,spec)
+                for t in client["tools"]:
+                    tools.append({"type":"function","function":{"name":name+"__"+t["name"],"description":t.get("description",""),"parameters":t.get("inputSchema",{"type":"object","properties":{}})}})
+            except Exception as e:self.log("MCP "+name+" failed: "+str(e))
+        return tools
+
+    def mcp_tool_call(self,full,args):
+        server,tool=full.split("__",1);client=self.mcp_clients[server]
+        return client["rpc"]("tools/call",{"name":tool,"arguments":args},int(time.time()*1000)%1000000000).get("result",{})
+
+    def ai_call_with_tools(self,cfg,prompt,tools):
+        from urllib.request import Request,urlopen
+        from urllib.error import HTTPError
+        key=os.environ.get(cfg.get("api_key_env","KCLONE_AI_API_KEY"))
+        if not key:return False,"Missing API key environment variable: "+cfg.get("api_key_env","KCLONE_AI_API_KEY")
+        messages=[{"role":"system","content":"You are Kclone's project-aware OS/ISO agent. Use MCP tools to inspect, edit, build and manage project resources when requested."},{"role":"user","content":prompt}]
+        for _ in range(6):
+            payload={"model":cfg.get("model","gpt-5"),"messages":messages}
+            if tools:payload["tools"]=tools
+            req=Request(cfg.get("base_url","https://api.openai.com/v1").rstrip("/")+"/chat/completions",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json","Authorization":"Bearer "+key})
+            try:
+                with urlopen(req,timeout=120) as rr:msg=json.loads(rr.read().decode())["choices"][0]["message"]
+            except HTTPError as e:return False,e.read().decode(errors="replace")[:3000]
+            except Exception as e:return False,str(e)
+            messages.append(msg);calls=msg.get("tool_calls",[])
+            if not calls:return True,msg
+            for call in calls:
+                fn=call["function"];args=json.loads(fn.get("arguments","{}") or "{}")
+                try:out=self.mcp_tool_call(fn["name"],args)
+                except Exception as e:out={"error":str(e)}
+                messages.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(out)[:16000]})
+        return True,{"content":"Tool-call limit reached."}
+
+    def ai_agent(self,prompt,cfg):
+        context=[]
+        for rel in ["KCLONE.json",".kclone/ai/config.json",".kclone/mcp/servers.json","resources/manifest.json","build/build.json"]:
+            p=os.path.join(self.project,rel)
+            if os.path.isfile(p):
+                try:
+                    with open(p,encoding="utf-8") as f:context.append("### "+rel+"\n"+f.read()[:10000])
+                except Exception:pass
+        tools=self.mcp_tools_for_ai()
+        system="You are Kclone's project-aware OS/ISO assistant. Use the authorized project MCP tools when changes are needed. Do not invent paths. Project context:\n"+"\n".join(context)
+        messages=[{"role":"system","content":system},{"role":"user","content":prompt}]
+        for _ in range(6):
+            ok,msg=self.ai_call(cfg,messages)
+            if not ok:return msg
+            calls=msg.get("tool_calls",[])
+            messages.append(msg)
+            if not calls:return msg.get("content","")
+            for call in calls:
+                fn=call.get("function",{});args=json.loads(fn.get("arguments","{}") or "{}")
+                try:out=self.mcp_tool_call(fn.get("name",""),args)
+                except Exception as e:out={"error":str(e)}
+                messages.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(out)[:16000]})
+        return "AI stopped after the tool-call limit."
+
     def ai_chat_async(self,prompt,cfg,say):
-        ok,msg=self.ai_call(cfg,[{"role":"system","content":"You are Kclone's project-aware assistant. The authorized project root is "+self.project+"."},{"role":"user","content":prompt}])
+        tools=self.mcp_tools_for_ai(); ok,msg=self.ai_call_with_tools(cfg,prompt,tools)
         text=msg if isinstance(msg,str) else msg.get("content","")
         self.after(0,lambda:say("KCLONE AI",text))
     def mcp_connect(self,name,spec):
