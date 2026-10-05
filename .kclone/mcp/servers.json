@@ -1,0 +1,6 @@
+{
+  "projectAware": true,
+  "mcpServers": {},
+  "scope": "project",
+  "capabilities": ["workspace", "files", "assets", "build", "tests", "git"]
+}
