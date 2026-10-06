@@ -21,32 +21,39 @@ def safe_name(name):
     return bool(name) and name not in (".","..") and not any(c in name for c in '/\\:*?"<>|')
 
 class GlowButton(tk.Canvas):
-    def __init__(self,parent,text,command,accent=False,width=150,**kw):
-        super().__init__(parent,width=width,height=42,bg=kw.pop("bg",PANEL),highlightthickness=0,bd=0)
-        self.text=text; self.command=command; self.accent=accent; self.hover=False; self.offset=0
-        self.bind("<Enter>",self.enter); self.bind("<Leave>",self.leave); self.bind("<Button-1>",lambda e:self.command())
+    def __init__(self,parent,text,command,accent=False,width=150,height=40,**kw):
+        super().__init__(parent,width=width,height=height,bg=kw.pop("bg",PANEL),highlightthickness=0,bd=0,cursor="hand2")
+        self.text=text; self.command=command; self.accent=accent; self.hover=False; self.t=0; self._job=None
+        self.bind("<Enter>",self.enter); self.bind("<Leave>",self.leave); self.bind("<Button-1>",self.press)
         self.draw()
     def draw(self):
-        self.delete("all"); w=int(self["width"]); h=42
-        fill="#1b4f91" if self.accent else PANEL2
-        if self.hover: fill="#2868b6" if self.accent else "#1d2531"
-        self.create_rectangle(2,2,w-2,h-2,fill=fill,outline="#31577f" if self.hover else BORDER,width=1)
-        self.create_text(w//2,21,text=self.text,fill="#ffffff" if self.accent else FG,font=("Segoe UI",10,"bold"))
-    def enter(self):
-        self.hover=True; self.draw()
-        if getattr(self,"_pulse",None):
-            try:self.after_cancel(self._pulse)
-            except Exception:pass
-        self._pulse=self.after(40,self._hover_tick,0)
-    def _hover_tick(self,n):
+        self.delete("all"); w=int(self["width"]); h=int(self["height"])
+        glow="#244e7f" if self.accent else "#17202c"
+        fill="#123f70" if self.accent else "#10151d"
+        if self.hover:
+            fill="#1d5b9b" if self.accent else "#18222f"
+        self.create_rectangle(2,2,w-2,h-2,fill=fill,outline="#4d88c5" if self.hover else BORDER,width=1)
+        if self.hover:
+            self.create_oval(-18,h//2-18,w+18,h//2+18,outline=glow,width=1)
+        self.create_text(w//2, h//2, text=self.text, fill="#ffffff" if self.accent else FG,
+                         font=("Segoe UI",10,"bold"))
+    def enter(self,_=None):
+        self.hover=True; self.t=0; self.draw(); self._animate()
+    def _animate(self):
         if not self.hover:return
-        self.offset=1 if n%2==0 else 0;self.draw();self._pulse=self.after(90,self._hover_tick,n+1)
-    def leave(self):
+        self.t=(self.t+1)%8
+        self.draw()
+        self._job=self.after(90,self._animate)
+    def leave(self,_=None):
         self.hover=False
-        if getattr(self,"_pulse",None):
-            try:self.after_cancel(self._pulse)
+        if self._job:
+            try:self.after_cancel(self._job)
             except Exception:pass
-        self.offset=0;self.draw()
+        self.draw()
+    def press(self,_=None):
+        self.configure(height=max(36,int(self["height"])-2))
+        self.after(70,lambda:self.configure(height=40))
+        self.command()
 
 class Kclone(tk.Tk):
     def __init__(self):
@@ -62,51 +69,141 @@ class Kclone(tk.Tk):
         return tk.Label(p,text=text,bg=p.cget("bg"),fg=color,font=("Segoe UI",size,"bold" if bold else "normal"))
 
     def build_shell(self):
-        top=tk.Frame(self,bg=BG,height=70); top.pack(fill="x",padx=22,pady=(16,8))
-        self.label(top,"KCLONE",26,FG,True).pack(side="left")
-        self.label(top,"  DEVELOPMENT WORKSPACE",10,MUTED,True).pack(side="left",pady=11)
-        right=tk.Frame(top,bg=BG); right.pack(side="right")
-        GlowButton(right,"Settings",self.settings,width=120).pack(side="left",padx=4)
-        GlowButton(right,"New Project",self.new_project,True,width=145).pack(side="left",padx=4)
+        self.configure(bg="#000000")
+        self.bg_canvas=tk.Canvas(self,bg="#000000",highlightthickness=0,bd=0)
+        self.bg_canvas.place(relx=0,rely=0,relwidth=1,relheight=1)
+        self.snow=[]
+        self._snow_seed()
+        self.shell=tk.Frame(self,bg="#000000")
+        self.shell.place(relx=0,rely=0,relwidth=1,relheight=1)
+        top=tk.Frame(self.shell,bg="#000000",height=68)
+        top.pack(fill="x",padx=22,pady=(14,8))
+        self.label(top,"KCLONE",25,FG,True).pack(side="left")
+        self.label(top,"  OS / ISO WORKSPACE",9,MUTED,True).pack(side="left",pady=10)
+        self.nav=tk.Frame(top,bg="#000000"); self.nav.pack(side="right")
+        self.home_btn=GlowButton(self.nav,"Home",self.show_home,width=92,bg="#000000")
+        self.home_btn.pack(side="left",padx=3)
+        self.settings_btn=GlowButton(self.nav,"Settings",self.settings,width=108,bg="#000000")
+        self.settings_btn.pack(side="left",padx=3)
+        GlowButton(self.nav,"＋ New Project",self.new_project,True,width=138,bg="#000000").pack(side="left",padx=3)
 
-        body=tk.Frame(self,bg=BG); body.pack(fill="both",expand=True,padx=18)
-        self.sidebar=tk.Frame(body,bg=PANEL,width=255,highlightbackground=BORDER,highlightthickness=1); self.sidebar.pack(side="left",fill="y",padx=(0,10))
-        self.main=tk.Frame(body,bg=BG); self.main.pack(side="left",fill="both",expand=True)
-        self.inspector=tk.Frame(body,bg=PANEL,width=300,highlightbackground=BORDER,highlightthickness=1); self.inspector.pack(side="right",fill="y",padx=(10,0))
+        self.viewhost=tk.Frame(self.shell,bg="#000000")
+        self.viewhost.pack(fill="both",expand=True,padx=18,pady=(0,18))
+        self.home_view=tk.Frame(self.viewhost,bg="#000000")
+        self.project_view=tk.Frame(self.viewhost,bg="#000000")
 
-        self.label(self.sidebar,"WORKSPACE",9,MUTED,True).pack(anchor="w",padx=16,pady=(18,8))
-        self.projects=tk.Listbox(self.sidebar,bg=PANEL,fg=FG,selectbackground="#214a78",selectforeground="#fff",relief="flat",bd=0,highlightthickness=0,font=("Segoe UI",10),activestyle="none")
-        self.projects.pack(fill="both",expand=True,padx=8); self.projects.bind("<<ListboxSelect>>",lambda e:self.open_selected())
-        GlowButton(self.sidebar,"＋  New Project",self.new_project,True,width=220).pack(padx=16,pady=8)
-        GlowButton(self.sidebar,"⌂  Workspace",self.choose_workspace,width=220).pack(padx=16,pady=(0,16))
+        # HOME: idle state, deliberately separate from project look.
+        hero=tk.Frame(self.home_view,bg="#000000")
+        hero.pack(fill="x",padx=34,pady=(45,18))
+        self.label(hero,"Welcome to Kclone",32,FG,True).pack(anchor="w")
+        self.label(hero,"Build operating systems, install resources, connect AI + MCP, create ISOs and test them.",11,MUTED).pack(anchor="w",pady=(7,0))
+        actions=tk.Frame(hero,bg="#000000"); actions.pack(anchor="w",pady=22)
+        GlowButton(actions,"＋  New Project",self.new_project,True,width=180,height=44,bg="#000000").pack(side="left",padx=(0,8))
+        GlowButton(actions,"Open Folder",self.choose_workspace,width=145,height=44,bg="#000000").pack(side="left",padx=8)
 
-        head=tk.Frame(self.main,bg=BG); head.pack(fill="x",pady=(0,8))
-        self.project_title=self.label(head,"No project open",20,FG,True); self.project_title.pack(side="left")
-        self.status=self.label(head,"● Ready",9,GREEN,True); self.status.pack(side="right",pady=7)
+        home_card=tk.Frame(self.home_view,bg=PANEL,highlightbackground=BORDER,highlightthickness=1)
+        home_card.pack(fill="both",expand=True,padx=34,pady=(0,20))
+        self.label(home_card,"RECENT PROJECTS",9,MUTED,True).pack(anchor="w",padx=18,pady=(15,8))
+        self.projects=tk.Listbox(home_card,bg=PANEL,fg=FG,selectbackground="#17385b",selectforeground="#ffffff",
+                                 relief="flat",bd=0,highlightthickness=0,font=("Segoe UI",11),activestyle="none")
+        self.projects.pack(fill="both",expand=True,padx=12,pady=(0,12))
+        self.projects.bind("<<ListboxSelect>>",lambda e:self.open_selected())
+        self.projects.bind("<Button-3>",self.home_menu)
 
-        split=tk.Frame(self.main,bg=BG); split.pack(fill="both",expand=True)
-        explorer=tk.Frame(split,bg=PANEL,highlightbackground=BORDER,highlightthickness=1); explorer.pack(side="left",fill="both",expand=True,padx=(0,6))
-        editor=tk.Frame(split,bg="#0a0c10",highlightbackground=BORDER,highlightthickness=1); editor.pack(side="right",fill="both",expand=True,padx=(6,0))
-        self.label(explorer,"PROJECT EXPLORER",9,MUTED,True).pack(anchor="w",padx=14,pady=(12,7))
-        self.tree=tk.Listbox(explorer,bg=PANEL,fg=FG,selectbackground="#18283b",selectforeground=BLUE2,relief="flat",bd=0,highlightthickness=0,font=("Consolas",10),activestyle="none")
-        self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.tree.bind("<Double-Button-1>",lambda e:self.tree_open()); self.tree.bind("<Button-3>",self.tree_menu)
-        self.filebar=tk.Frame(editor,bg=PANEL2,height=40); self.filebar.pack(fill="x")
+        # PROJECT LOOK: tree + editor + inspector + output.
+        self.project_view.grid_rowconfigure(1,weight=1); self.project_view.grid_columnconfigure(1,weight=1)
+        bar=tk.Frame(self.project_view,bg="#000000",height=48); bar.grid(row=0,column=0,columnspan=3,sticky="ew",pady=(0,8))
+        self.back_project=GlowButton(bar,"‹ Home",self.show_home,width=92,bg="#000000"); self.back_project.pack(side="left")
+        self.project_title=self.label(bar,"No project open",18,FG,True); self.project_title.pack(side="left",padx=12)
+        self.status=self.label(bar,"● Ready",9,GREEN,True); self.status.pack(side="right",pady=8)
+        GlowButton(bar,"Build",self.build_panel,False,90,bg="#000000").pack(side="right",padx=3)
+        GlowButton(bar,"Run OS",self.vm_panel,True,100,bg="#000000").pack(side="right",padx=3)
+
+        self.sidebar=tk.Frame(self.project_view,bg=PANEL,highlightbackground=BORDER,highlightthickness=1,width=235)
+        self.sidebar.grid(row=1,column=0,sticky="nsew",padx=(0,7))
+        self.sidebar.grid_propagate(False)
+        self.label(self.sidebar,"PROJECT",9,MUTED,True).pack(anchor="w",padx=14,pady=(14,5))
+        self.project_path_label=self.label(self.sidebar,"",8,MUTED); self.project_path_label.pack(anchor="w",padx=14,pady=(0,12))
+        GlowButton(self.sidebar,"＋ File",lambda:self.new_path(self.project or self.workspace,False),False,95,bg=PANEL).pack(anchor="w",padx=12,pady=3)
+        GlowButton(self.sidebar,"＋ Folder",lambda:self.new_path(self.project or self.workspace,True),False,95,bg=PANEL).pack(anchor="w",padx=12,pady=3)
+        self.label(self.sidebar,"TREE",8,MUTED,True).pack(anchor="w",padx=14,pady=(13,4))
+        self.tree=tk.Listbox(self.sidebar,bg=PANEL,fg=FG,selectbackground="#17385b",selectforeground=BLUE2,
+                             relief="flat",bd=0,highlightthickness=0,font=("Consolas",9),activestyle="none")
+        self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8))
+        self.tree.bind("<Double-Button-1>",lambda e:self.tree_open())
+        self.tree.bind("<Button-3>",self.tree_menu)
+
+        editor=tk.Frame(self.project_view,bg="#080a0e",highlightbackground=BORDER,highlightthickness=1)
+        editor.grid(row=1,column=1,sticky="nsew",padx=7)
+        self.filebar=tk.Frame(editor,bg=PANEL2,height=42); self.filebar.pack(fill="x")
         self.file_label=self.label(self.filebar,"  Welcome",9,MUTED); self.file_label.pack(side="left",fill="x",expand=True)
-        GlowButton(self.filebar,"Save",self.save_file,width=85,bg=PANEL2).pack(side="right",padx=5,pady=4)
-        self.editor=tk.Text(editor,bg="#090b0f",fg="#e9edf3",insertbackground=BLUE2,selectbackground="#213c5b",relief="flat",font=("Consolas",11),padx=16,pady=14,undo=True)
+        GlowButton(self.filebar,"Save",self.save_file,width=82,height=34,bg=PANEL2).pack(side="right",padx=5,pady=4)
+        self.editor=tk.Text(editor,bg="#07090d",fg="#e9edf3",insertbackground=BLUE2,selectbackground="#213c5b",
+                            relief="flat",font=("Consolas",11),padx=16,pady=14,undo=True)
         self.editor.pack(fill="both",expand=True)
 
-        self.label(self.inspector,"PROJECT CONTROL",9,MUTED,True).pack(anchor="w",padx=16,pady=(18,8))
-        self.card(self.inspector,"AI", "Project-aware AI connection",self.ai_panel)
-        self.card(self.inspector,"MCP","Tools, servers and permissions",self.mcp_panel)
-        self.card(self.inspector,"RESOURCES","Assets, SDKs and toolchains",self.resources_panel)
-        self.card(self.inspector,"BUILD / ISO","Validate, build and inspect artifacts",self.build_panel); self.card(self.inspector,"VM / OS","Boot, disks, acceleration and testing",self.vm_panel)
+        self.inspector=tk.Frame(self.project_view,bg=PANEL,width=285,highlightbackground=BORDER,highlightthickness=1)
+        self.inspector.grid(row=1,column=2,sticky="nsew",padx=(7,0))
+        self.inspector.grid_propagate(False)
+        self.label(self.inspector,"PROJECT CONTROL",9,MUTED,True).pack(anchor="w",padx=15,pady=(15,8))
+        self.card(self.inspector,"AI","Connect, chat and let AI edit the workspace",self.ai_panel)
+        self.card(self.inspector,"MCP","Servers, tools, resources and permissions",self.mcp_panel)
+        self.card(self.inspector,"RESOURCES","Install SDKs, assets, fonts and dependencies",self.resources_panel)
+        self.card(self.inspector,"BUILD / ISO","Validate, build, clean and inspect artifacts",self.build_panel)
+        self.card(self.inspector,"VM / OS","QEMU, disk, acceleration and boot testing",self.vm_panel)
+        self.card(self.inspector,"GIT","Status, commit and branch helpers",self.git_panel)
 
-        bottom=tk.Frame(self,bg="#050608",height=145,highlightbackground=BORDER,highlightthickness=1); bottom.pack(fill="x",padx=18,pady=(10,16))
-        self.label(bottom,"OUTPUT",9,MUTED,True).pack(anchor="w",padx=12,pady=(8,2))
-        self.output=tk.Text(bottom,bg="#050608",fg="#9aa5b4",relief="flat",height=6,font=("Consolas",9),state="disabled")
-        self.output.pack(fill="both",expand=True,padx=12,pady=(0,7))
-        self.log("Kclone ready. Create or open a project.")
+        bottom=tk.Frame(self.project_view,bg="#050608",height=130,highlightbackground=BORDER,highlightthickness=1)
+        bottom.grid(row=2,column=0,columnspan=3,sticky="ew",pady=(8,0))
+        self.label(bottom,"OUTPUT / BUILD LOG",8,MUTED,True).pack(anchor="w",padx=12,pady=(7,2))
+        self.output=tk.Text(bottom,bg="#050608",fg="#9aa5b4",relief="flat",height=5,font=("Consolas",9),state="disabled")
+        self.output.pack(fill="both",expand=True,padx=12,pady=(0,6))
+        self.show_home()
+
+    def _snow_seed(self):
+        import random
+        self.snow=[]
+        for _ in range(85):
+            self.snow.append([random.randint(0,1500),random.randint(0,950),random.choice([1,1,1,2,2,3]),random.choice([1,1,2])])
+        self._snow_tick()
+
+    def _snow_tick(self):
+        try:
+            self.bg_canvas.delete("snow")
+            w=max(800,self.winfo_width()); h=max(600,self.winfo_height())
+            for p in self.snow:
+                p[1]+=p[3]; p[0]+=((p[2]%3)-1)*0.35
+                if p[1]>h+8: p[1]=-8
+                if p[0]<0:p[0]=w
+                if p[0]>w:p[0]=0
+                r=p[2]
+                self.bg_canvas.create_oval(p[0],p[1],p[0]+r,p[1]+r,fill="#dce8f5",outline="",tags="snow")
+            self.after(45,self._snow_tick)
+        except Exception: pass
+
+    def show_home(self):
+        self.project_view.pack_forget()
+        self.home_view.pack(fill="both",expand=True)
+        self.refresh_projects()
+
+    def show_project(self):
+        self.home_view.pack_forget()
+        self.project_view.pack(fill="both",expand=True)
+        if self.project:
+            self.project_path_label.config(text=self.project)
+        self.populate_tree()
+
+    def home_menu(self,event):
+        idx=self.projects.nearest(event.y)
+        if idx < 0:return
+        self.projects.selection_clear(0,"end"); self.projects.selection_set(idx)
+        p=os.path.join(self.workspace,self.projects.get(idx))
+        menu=tk.Menu(self,tearoff=0,bg=PANEL2,fg=FG,activebackground="#28527f",activeforeground=FG)
+        menu.add_command(label="Open Project",command=lambda:self.open_project(p))
+        menu.add_command(label="Copy Path",command=lambda:self.copy_path(p))
+        menu.add_command(label="Open Folder",command=lambda:self.open_folder(p))
+        menu.add_command(label="Remove Project",command=lambda:self.remove_path(p))
+        menu.tk_popup(event.x_root,event.y_root)
 
     def card(self,parent,title,subtitle,command):
         c=tk.Frame(parent,bg=PANEL2,highlightbackground=BORDER,highlightthickness=1,cursor="hand2")
@@ -122,17 +219,29 @@ class Kclone(tk.Tk):
 
     def refresh_projects(self):
         self.projects.delete(0,"end")
-        for n in sorted(os.listdir(self.workspace)):
-            if os.path.isdir(os.path.join(self.workspace,n)) and not n.startswith("."): self.projects.insert("end",n)
+        names=[n for n in sorted(os.listdir(self.workspace)) if os.path.isdir(os.path.join(self.workspace,n)) and not n.startswith(".")]
+        for n in names:
+            meta=self.read_json(os.path.join(self.workspace,n,"KCLONE.json"),{})
+            kind="OS / ISO" if meta.get("type")=="os" else "PROJECT"
+            self.projects.insert("end",f"  {n}   ·   {kind}")
 
     def open_selected(self):
         s=self.projects.curselection()
         if not s:return
-        p=os.path.join(self.workspace,self.projects.get(s[0]))
+        label=self.projects.get(s[0]).strip()
+        name=label.split("   ·   ")[0].strip()
+        if name.startswith(" "): name=name.strip()
+        p=os.path.join(self.workspace,name)
         if os.path.isdir(p): self.open_project(p)
 
     def open_project(self,p):
-        self.project=os.path.abspath(p); self.project_title.config(text=os.path.basename(p)); self.status.config(text="● Project loaded",fg=GREEN); self.ensure_project_files(); self.populate_tree(); self.log("Opened "+self.project)
+        self.project=os.path.abspath(p)
+        self.project_title.config(text=os.path.basename(p))
+        self.status.config(text="● Project loaded",fg=GREEN)
+        self.ensure_project_files()
+        self.project_path_label.config(text=self.project)
+        self.show_project()
+        self.log("Opened "+self.project)
 
     def read_json(self,path,default=None):
         try:
@@ -193,14 +302,19 @@ class Kclone(tk.Tk):
         idx=self.tree.nearest(event.y);self.tree.selection_clear(0,"end");self.tree.selection_set(idx);path=self.tree_path(idx)
         menu=tk.Menu(self,tearoff=0,bg=PANEL2,fg=FG,activebackground="#28527f",activeforeground=FG)
         if os.path.isdir(path):
-            menu.add_command(label="Run OS",command=self.vm_panel);menu.add_command(label="Build ISO",command=self.build_panel);menu.add_separator()
+            menu.add_command(label="▶  Run OS",command=self.vm_panel)
+            menu.add_command(label="⚙  Build ISO",command=self.build_panel)
+            menu.add_separator()
         menu.add_command(label="Open",command=self.tree_open)
         menu.add_command(label="Rename",command=lambda:self.rename_path(path))
         menu.add_command(label="Copy Path",command=lambda:self.copy_path(path))
         menu.add_command(label="New File",command=lambda:self.new_path(path,False))
         menu.add_command(label="New Folder",command=lambda:self.new_path(path,True))
         menu.add_command(label="Copy",command=lambda:self.copy_path_to(path))
-        menu.add_separator();menu.add_command(label="Remove",command=lambda:self.remove_path(path));menu.tk_popup(event.x_root,event.y_root)
+        menu.add_command(label="Open in Explorer",command=lambda:self.open_folder(path if os.path.isdir(path) else os.path.dirname(path)))
+        menu.add_separator()
+        menu.add_command(label="Remove",command=lambda:self.remove_path(path))
+        menu.tk_popup(event.x_root,event.y_root)
 
     def rename_path(self,path):
         name=simpledialog.askstring("Rename","New name:",initialvalue=os.path.basename(path),parent=self)
@@ -432,6 +546,33 @@ class Kclone(tk.Tk):
             except Exception as e:messagebox.showerror("MCP",str(e))
         bar=tk.Frame(left,bg=PANEL);bar.pack(fill="x",padx=8,pady=8)
         GlowButton(bar,"Add",add,True,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Start",start,False,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Save",lambda:self.write_json(path,cfg),False,90,bg=PANEL).pack(side="left",padx=2)
+    def git_panel(self):
+        if not self.project:return messagebox.showwarning("Git","Open a project first.")
+        w=tk.Toplevel(self);w.title("Git Control");w.geometry("820x560");w.configure(bg=BG)
+        self.label(w,"GIT",22,FG,True).pack(anchor="w",padx=25,pady=(22,2))
+        self.label(w,"Local repository controls for the active project.",9,MUTED).pack(anchor="w",padx=25,pady=(0,12))
+        out=tk.Text(w,bg=PANEL,fg=FG,relief="flat",font=("Consolas",10));out.pack(fill="both",expand=True,padx=25,pady=10)
+        def run(*args):
+            try:
+                p=subprocess.run(["git"]+list(args),cwd=self.project,capture_output=True,text=True,timeout=120)
+                out.insert("end",(p.stdout or p.stderr or "(no output)")+"\n");out.see("end")
+            except Exception as e:out.insert("end",str(e)+"\n")
+        bar=tk.Frame(w,bg=BG);bar.pack(fill="x",padx=25,pady=10)
+        for textv,args in [("Status",("status","--short","--branch")),("Branches",("branch","-vv")),("Log",("log","--oneline","-12"))]:
+            GlowButton(bar,textv,lambda a=args:run(*a),False,110,bg=BG).pack(side="left",padx=3)
+        GlowButton(bar,"Commit",lambda:self.git_commit_dialog(run),True,110,bg=BG).pack(side="left",padx=3)
+        run("status","--short","--branch")
+
+    def git_commit_dialog(self,run):
+        msg=simpledialog.askstring("Git Commit","Commit message:",parent=self)
+        if not msg:return
+        try:
+            subprocess.run(["git","add","-A"],cwd=self.project,check=True,capture_output=True,text=True)
+            p=subprocess.run(["git","commit","-m",msg],cwd=self.project,capture_output=True,text=True)
+            self.log(p.stdout or p.stderr)
+            run("status","--short","--branch")
+        except Exception as e:messagebox.showerror("Git",str(e))
+
     def resources_panel(self):
         if not self.project:return messagebox.showwarning("Resources","Open a project first.")
         r=os.path.join(self.project,"resources");os.makedirs(r,exist_ok=True)
