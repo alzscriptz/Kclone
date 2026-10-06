@@ -277,6 +277,10 @@ class Kclone(tk.Tk):
         ai=os.path.join(self.project,".kclone","ai","config.json")
         if not os.path.exists(ai):
             self.write_json(ai,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
+        meta=self.read_json(os.path.join(self.project,"KCLONE.json"),{})
+        if meta.get("type")=="os" and not os.path.isfile(os.path.join(self.project,"build","build.py")):
+            template_src=os.path.join(getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__))),"templates","os","build.py")
+            if os.path.isfile(template_src):shutil.copy2(template_src,os.path.join(self.project,"build","build.py"))
         mp=os.path.join(self.project,".kclone","mcp","servers.json")
         mcfg=self.read_json(mp,{})
         if not mcfg.get("mcpServers"):
@@ -376,10 +380,8 @@ class Kclone(tk.Tk):
         self.ai_panel_with_prompt(prompt)
 
     def ai_panel_with_prompt(self,prefill):
-        self.ai_panel()
-        # The AI window is intentionally populated by the normal panel; keep the
-        # action explicit so no change is made without the user's request.
-        self.after(50,lambda:self.log("AI context: "+prefill))
+        self.ai_panel(prefill)
+        self.log("AI context prepared: "+prefill)
 
     def rename_path(self,path):
         name=simpledialog.askstring("Rename","New name:",initialvalue=os.path.basename(path),parent=self)
@@ -472,7 +474,7 @@ class Kclone(tk.Tk):
         os.makedirs(os.path.dirname(path),exist_ok=True)
         with open(path,"w",encoding="utf-8") as f:json.dump(data,f,indent=2)
 
-    def ai_panel(self):
+    def ai_panel(self,prefill=None):
         if not self.project:return messagebox.showwarning("AI","Open a project first.")
         self.ensure_project_files();path=os.path.join(self.project,".kclone","ai","config.json");cfg=self.read_json(path,{})
         w=tk.Toplevel(self);w.title("Kclone AI");w.geometry("900x700");w.configure(bg=BG)
@@ -485,6 +487,7 @@ class Kclone(tk.Tk):
         self.label(w,"CHAT",9,MUTED,True).pack(anchor="w",padx=25,pady=(15,4))
         chat=tk.Text(w,bg=PANEL,fg=FG,relief="flat",font=("Consolas",10),state="disabled");chat.pack(fill="both",expand=True,padx=25)
         row=tk.Frame(w,bg=BG);row.pack(fill="x",padx=25,pady=10);prompt=tk.Entry(row,bg=PANEL2,fg=FG,insertbackground=FG,relief="flat");prompt.pack(side="left",fill="x",expand=True,ipady=9)
+        if prefill: prompt.insert(0,prefill)
         def say(role,text):
             chat.configure(state="normal");chat.insert("end",f"{role}: {text}\n\n");chat.see("end");chat.configure(state="disabled")
         def save_cfg():
@@ -682,7 +685,13 @@ class Kclone(tk.Tk):
         if choice is True:
             f=filedialog.askopenfilename()
             if f:
-                shutil.copy2(f,os.path.join(r,os.path.basename(f)));self.log("Installed resource: "+os.path.basename(f));self.populate_tree()
+                dest=os.path.join(r,os.path.basename(f))
+                shutil.copy2(f,dest)
+                manifest_path=os.path.join(r,"manifest.json")
+                manifest=self.read_json(manifest_path,{"version":1,"resources":[],"install_root":"resources","auto_include":True})
+                manifest.setdefault("resources",[]).append({"name":os.path.basename(f),"path":"resources/"+os.path.basename(f),"kind":"asset/resource","source":os.path.abspath(f)})
+                self.write_json(manifest_path,manifest)
+                self.log("Installed resource: "+os.path.basename(f));self.populate_tree()
         elif choice is False:
             try:
                 if os.name=="nt":os.startfile(r)
