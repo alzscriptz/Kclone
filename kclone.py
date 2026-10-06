@@ -385,8 +385,18 @@ class Kclone(tk.Tk):
                 self.write_json(os.path.join(p,".kclone","mcp","servers.json"),{"version":1,"projectAware":True,"scope":"project","mcpServers":{"kclone-workspace":{"transport":"stdio","command":command,"args":args+["--root",p],"enabled":True}},"capabilities":["tools","resources","workspace","files","assets","resources","build","tests","git","vm"]})
                 self.write_json(os.path.join(p,".kclone","vm.json"),{"backend":"qemu","memory_mb":6144,"cpus":6,"disk_gb":48,"graphics":{"device":"virtio-gpu-gl","3d":True,"hostmem":"4G"},"acceleration":{"auto":True,"kvm":True,"whpx":True,"hvf":True}})
                 with open(os.path.join(p,".gitignore"),"w",encoding="utf-8") as f:f.write(".venv/\\n__pycache__/\\n*.pyc\\n")
-                rr=subprocess.run(["git","init",p],capture_output=True,text=True)
-                if rr.returncode:raise RuntimeError(rr.stderr.strip() or "Git initialization failed")
+                # Git is an optional integration: project creation must not fail just
+                # because Git is not installed or is not on PATH.
+                git_exe=shutil.which("git")
+                if git_exe:
+                    try:
+                        rr=subprocess.run([git_exe,"init",p],capture_output=True,text=True,timeout=30)
+                        if rr.returncode:
+                            self.log("Git init skipped: "+(rr.stderr.strip() or "Git initialization failed"))
+                    except (FileNotFoundError,subprocess.TimeoutExpired) as ge:
+                        self.log("Git init skipped: "+str(ge))
+                else:
+                    self.log("Git not found — project created without Git. Install Git later to enable source control.")
                 self.project=p; self.refresh_projects()
                 for i in range(self.projects.size()):
                     if self.projects.get(i)==n:self.projects.selection_set(i);break
