@@ -654,11 +654,23 @@ class Kclone(tk.Tk):
             row=tk.Frame(panel,bg=PANEL);row.pack(fill="x",padx=18,pady=8);self.label(row,title,9,MUTED,True).pack(side="left");e=tk.Entry(row,bg=PANEL2,fg=FG,relief="flat",width=10);e.insert(0,str(self.cfg["vm"].get(key,default)));e.pack(side="right");vals[key]=e
         gpu=tk.BooleanVar(value=self.cfg["vm"].get("enable_3d",True));tk.Checkbutton(panel,text="3D / VirGL (virtio-gpu-gl when supported)",variable=gpu,bg=PANEL,fg=FG,selectcolor=PANEL2,activebackground=PANEL,activeforeground=FG).pack(anchor="w",padx=18,pady=(2,14))
         def install():
-            if os.name=="nt":cmd=["winget","install","-e","--id","SoftwareFreedomConservancy.QEMU","--accept-source-agreements","--accept-package-agreements"]
+            if os.name=="nt":
+                winget=shutil.which("winget")
+                if not winget:return messagebox.showerror("QEMU","WinGet was not found on this Windows installation.")
+                cmd=[winget,"install","-e","--id","SoftwareFreedomConservancy.QEMU","--accept-source-agreements","--accept-package-agreements"]
             elif shutil.which("brew"):cmd=["brew","install","qemu"]
             elif shutil.which("apt-get"):cmd=["sudo","apt-get","install","-y","qemu-system-x86"]
             else:return messagebox.showinfo("QEMU","Install QEMU with your system package manager.")
-            threading.Thread(target=lambda:self.log((subprocess.run(cmd,capture_output=True,text=True).stdout or "")[-3000:]),daemon=True).start()
+            def install_run():
+                try:
+                    r=subprocess.run(cmd,capture_output=True,text=True)
+                    msg=(r.stdout or r.stderr or "")[-3000:]
+                    self.after(0,lambda:self.log(msg))
+                    if r.returncode==0:self.after(0,lambda:messagebox.showinfo("QEMU","Installation finished. Press Start OS again."))
+                    else:self.after(0,lambda:messagebox.showerror("QEMU",(r.stderr or r.stdout or "Installation failed")[-2500:]))
+                except FileNotFoundError:self.after(0,lambda:messagebox.showerror("QEMU","Installer executable was not found."))
+                except Exception as e:self.after(0,lambda:messagebox.showerror("QEMU",str(e)))
+            threading.Thread(target=install_run,daemon=True).start()
         def start():
             q2=self.find_qemu()
             if not q2:return messagebox.showwarning("QEMU required","Install QEMU, then press Start OS again.")
