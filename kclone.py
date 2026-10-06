@@ -23,7 +23,7 @@ def safe_name(name):
 class GlowButton(tk.Canvas):
     def __init__(self,parent,text,command,accent=False,width=150,height=40,**kw):
         super().__init__(parent,width=width,height=height,bg=kw.pop("bg",PANEL),highlightthickness=0,bd=0,cursor="hand2")
-        self.text=text; self.command=command; self.accent=accent; self.hover=False; self.t=0; self._job=None
+        self.text=text; self.command=command; self.accent=accent; self.hover=False; self.t=0; self._job=None; self.base_height=height
         self.bind("<Enter>",self.enter); self.bind("<Leave>",self.leave); self.bind("<Button-1>",self.press)
         self.draw()
     def draw(self):
@@ -51,8 +51,8 @@ class GlowButton(tk.Canvas):
             except Exception:pass
         self.draw()
     def press(self,_=None):
-        self.configure(height=max(36,int(self["height"])-2))
-        self.after(70,lambda:self.configure(height=40))
+        self.configure(height=max(36,self.base_height-2))
+        self.after(70,lambda:self.configure(height=self.base_height))
         self.command()
 
 class Kclone(tk.Tk):
@@ -197,7 +197,9 @@ class Kclone(tk.Tk):
         idx=self.projects.nearest(event.y)
         if idx < 0:return
         self.projects.selection_clear(0,"end"); self.projects.selection_set(idx)
-        p=os.path.join(self.workspace,self.projects.get(idx))
+        label=self.projects.get(idx).strip()
+        name=label.split("   ·   ")[0].strip()
+        p=os.path.join(self.workspace,name)
         menu=tk.Menu(self,tearoff=0,bg=PANEL2,fg=FG,activebackground="#28527f",activeforeground=FG)
         menu.add_command(label="Open Project",command=lambda:self.open_project(p))
         menu.add_command(label="Copy Path",command=lambda:self.copy_path(p))
