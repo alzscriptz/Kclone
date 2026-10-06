@@ -61,7 +61,7 @@ class Kclone(tk.Tk):
         self.title("Kclone")
         self.geometry("1500x920"); self.minsize(1180,720); self.configure(bg=BG)
         self.cfg=load_config(); self.workspace=self.cfg["workspace"]; os.makedirs(self.workspace,exist_ok=True)
-        self.project=None; self.current_file=None; self.vm_proc=None
+        self.project=None; self.current_file=None; self.vm_proc=None; self.mcp_clients={}; self.tree_visible_mode="project"
         self.protocol("WM_DELETE_WINDOW",self.close)
         self.build_shell(); self.refresh_projects()
 
@@ -132,6 +132,9 @@ class Kclone(tk.Tk):
         self.tree.pack(fill="both",expand=True,padx=8,pady=(0,8))
         self.tree.bind("<Double-Button-1>",lambda e:self.tree_open())
         self.tree.bind("<Button-3>",self.tree_menu)
+        self.tree.bind("<Button-2>",self.tree_menu)
+        self.tree.bind("<Shift-F10>",self.tree_menu_keyboard)
+        self.tree.bind("<Menu>",self.tree_menu_keyboard)
 
         editor=tk.Frame(self.project_view,bg="#080a0e",highlightbackground=BORDER,highlightthickness=1)
         editor.grid(row=1,column=1,sticky="nsew",padx=7)
@@ -267,6 +270,10 @@ class Kclone(tk.Tk):
         if not self.project:return
         os.makedirs(os.path.join(self.project,"resources"),exist_ok=True)
         os.makedirs(os.path.join(self.project,"artifacts"),exist_ok=True)
+        meta=self.read_json(os.path.join(self.project,"KCLONE.json"),{})
+        if meta.get("type")=="os":
+            for d in ["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","artifacts"]:
+                os.makedirs(os.path.join(self.project,d),exist_ok=True)
         ai=os.path.join(self.project,".kclone","ai","config.json")
         if not os.path.exists(ai):
             self.write_json(ai,{"enabled":True,"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"gpt-5","api_key_env":"KCLONE_AI_API_KEY","project_root":".","permissions":{"read":True,"write":True,"delete":True,"build":True,"git":True,"mcp":True,"resources":True,"vm":True}})
@@ -279,18 +286,47 @@ class Kclone(tk.Tk):
             if "Kclone-MCP" in str(first.get("command","")):
                 self.write_default_mcp(mp)
 
+    def tree_hidden(self,relpath):
+        rel=relpath.replace("\\","/").strip("/")
+        if not rel:return False
+        parts=rel.split("/")
+        hidden={".git","__pycache__",".venv",".kclone","iso-root","rootfs","proc","sys","dev","run","tmp","var","usr","bin","sbin","home","mnt","opt","lost+found"}
+        return any(part in hidden for part in parts)
+
+    def tree_is_visible(self,path):
+        if not self.project:return False
+        try: rel=os.path.relpath(path,self.project).replace("\\","/")
+        except ValueError:return False
+        return not self.tree_hidden(rel)
+
     def populate_tree(self):
         self.tree.delete(0,"end")
         if not self.project:return
+        is_os=self.read_json(os.path.join(self.project,"KCLONE.json"),{}).get("type")=="os"
+        self.tree_visible_mode="os" if is_os else "project"
         def walk(path,depth=0):
             try:names=sorted(os.listdir(path),key=lambda n:(not os.path.isdir(os.path.join(path,n)),n.lower()))
             except OSError:return
             for n in names:
-                if n in (".git","__pycache__"):continue
-                f=os.path.join(path,n); prefix="   "*depth+("▸ " if os.path.isdir(f) else "• ")
+                f=os.path.join(path,n)
+                rel=os.path.relpath(f,self.project).replace("\\","/")
+                if self.tree_hidden(rel):continue
+                prefix="   "*depth+("▸ " if os.path.isdir(f) else "• ")
                 self.tree.insert("end",prefix+n)
                 if os.path.isdir(f):walk(f,depth+1)
-        self.tree.insert("end","▾ "+os.path.basename(self.project)); walk(self.project,1)
+        self.tree.insert("end","▾ "+os.path.basename(self.project))
+        walk(self.project,1)
+
+    def tree_menu_keyboard(self,event=None):
+        if self.tree.size():
+            idx=self.tree.curselection()
+            if not idx: self.tree.selection_set(0)
+            self.tree_menu(event)
+
+    def tree_selected_path(self):
+        sel=self.tree.curselection()
+        if not sel:return None
+        return self.tree_path(sel[0])
 
     def tree_path(self,idx):
         stack=[]
@@ -300,23 +336,50 @@ class Kclone(tk.Tk):
             else:stack=stack[:depth]+[name]
         return os.path.join(self.project,*stack[1:])
 
-    def tree_menu(self,event):
-        idx=self.tree.nearest(event.y);self.tree.selection_clear(0,"end");self.tree.selection_set(idx);path=self.tree_path(idx)
+    def tree_menu(self,event=None):
+        if not self.tree.size():return
+        if event is not None and getattr(event,"y",None) is not None:
+            idx=self.tree.nearest(event.y)
+            self.tree.selection_clear(0,"end");self.tree.selection_set(idx)
+        path=self.tree_selected_path()
+        if not path:return
+        if not self.tree_is_visible(path):return
         menu=tk.Menu(self,tearoff=0,bg=PANEL2,fg=FG,activebackground="#28527f",activeforeground=FG)
         if os.path.isdir(path):
+            menu.add_command(label="＋  New File",command=lambda:self.new_path(path,False))
+            menu.add_command(label="＋  New Folder",command=lambda:self.new_path(path,True))
+            menu.add_separator()
             menu.add_command(label="▶  Run OS",command=self.vm_panel)
             menu.add_command(label="⚙  Build ISO",command=self.build_panel)
-            menu.add_separator()
-        menu.add_command(label="Open",command=self.tree_open)
+        else:
+            menu.add_command(label="Open",command=self.tree_open)
+        menu.add_separator()
         menu.add_command(label="Rename",command=lambda:self.rename_path(path))
         menu.add_command(label="Copy Path",command=lambda:self.copy_path(path))
-        menu.add_command(label="New File",command=lambda:self.new_path(path,False))
-        menu.add_command(label="New Folder",command=lambda:self.new_path(path,True))
-        menu.add_command(label="Copy",command=lambda:self.copy_path_to(path))
+        menu.add_command(label="Copy / Duplicate",command=lambda:self.copy_path_to(path))
         menu.add_command(label="Open in Explorer",command=lambda:self.open_folder(path if os.path.isdir(path) else os.path.dirname(path)))
+        menu.add_command(label="Add Resource",command=self.resources_panel)
+        menu.add_command(label="Ask AI to Inspect",command=lambda:self.ai_context_action("inspect",path))
+        menu.add_command(label="Ask AI to Modify",command=lambda:self.ai_context_action("modify",path))
         menu.add_separator()
         menu.add_command(label="Remove",command=lambda:self.remove_path(path))
-        menu.tk_popup(event.x_root,event.y_root)
+        menu.tk_popup(event.x_root if event else self.winfo_pointerx(),event.y_root if event else self.winfo_pointery())
+
+    def ai_context_action(self,action,path):
+        if not self.project:return
+        label="Inspect" if action=="inspect" else "Modify"
+        prompt=f"{label} this project path: {os.path.relpath(path,self.project).replace(os.sep,'/')}. "
+        if action=="inspect":
+            prompt+="Explain its role in the OS project and report anything important or broken. Do not change files."
+        else:
+            prompt+="Review it in the context of the whole OS project and make any requested changes using the authorized MCP workspace tools."
+        self.ai_panel_with_prompt(prompt)
+
+    def ai_panel_with_prompt(self,prefill):
+        self.ai_panel()
+        # The AI window is intentionally populated by the normal panel; keep the
+        # action explicit so no change is made without the user's request.
+        self.after(50,lambda:self.log("AI context: "+prefill))
 
     def rename_path(self,path):
         name=simpledialog.askstring("Rename","New name:",initialvalue=os.path.basename(path),parent=self)
@@ -372,7 +435,7 @@ class Kclone(tk.Tk):
             if os.path.exists(p):error.config(text="That project already exists.");return
             try:
                 os.makedirs(p)
-                folders=["src","assets","resources","build","artifacts","docs"] if template.get()!="OS / ISO" else ["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","docs","artifacts"]
+                folders=["src","assets","resources","build","artifacts","docs"] if template.get()!="OS / ISO" else ["kernel","boot","system","drivers","apps","lib","etc","assets/icons","assets/wallpapers","assets/boot","assets/ui","resources","build","scripts","tests","artifacts"]
                 for d in folders:os.makedirs(os.path.join(p,d),exist_ok=True)
                 if template.get()=="OS / ISO":
                     template_src=os.path.join(getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__))),"templates","os","build.py")
@@ -516,21 +579,42 @@ class Kclone(tk.Tk):
         text=msg if isinstance(msg,str) else msg.get("content","")
         self.after(0,lambda:say("KCLONE AI",text))
     def mcp_connect(self,name,spec):
-        if not hasattr(self,"mcp_clients"):self.mcp_clients={}
-        if name in self.mcp_clients:return self.mcp_clients[name]
-        cmd=[spec["command"]]+spec.get("args",[]);env=os.environ.copy();env["KCLONE_PROJECT_ROOT"]=self.project
-        proc=subprocess.Popen(cmd,cwd=self.project,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env)
-        def rpc(method,params=None,rid=1):
+        if name in self.mcp_clients:
+            client=self.mcp_clients[name]
+            if client["process"].poll() is None:return client
+            self.mcp_clients.pop(name,None)
+        command=spec.get("command")
+        args=list(spec.get("args",[]))
+        if not command:raise RuntimeError("MCP server command is empty.")
+        env=os.environ.copy();env["KCLONE_PROJECT_ROOT"]=self.project or ""
+        try:
+            proc=subprocess.Popen([command]+args,cwd=self.project or os.getcwd(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env)
+        except FileNotFoundError:
+            raise RuntimeError("MCP executable not found: "+command+"\nCheck the server command or rebuild Kclone so the bundled Kclone MCP server is included.")
+        def rpc(method,params=None,rid=None):
+            if proc.poll() is not None:
+                err=""
+                try:err=proc.stderr.read()[-2000:]
+                except Exception:pass
+                raise RuntimeError("MCP server exited before replying."+("\n"+err if err else ""))
+            rid=rid or int(time.time()*1000)%1000000000
             proc.stdin.write(json.dumps({"jsonrpc":"2.0","id":rid,"method":method,"params":params or {}})+"\n");proc.stdin.flush()
-            while True:
+            deadline=time.time()+20
+            while time.time()<deadline:
                 line=proc.stdout.readline()
-                if not line:raise RuntimeError("MCP server closed stdout")
-                obj=json.loads(line)
-                if obj.get("id")==rid:return obj
-        rpc("initialize",{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"Kclone","version":"1.0"}},1)
+                if not line:break
+                try:obj=json.loads(line)
+                except json.JSONDecodeError:continue
+                if obj.get("id")==rid:
+                    if "error" in obj:raise RuntimeError(obj["error"].get("message","MCP JSON-RPC error"))
+                    return obj
+            raise RuntimeError("MCP timeout waiting for "+method)
+        init=rpc("initialize",{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"Kclone","version":"2.0"}},1)
+        negotiated=init.get("result",{}).get("protocolVersion","unknown")
         proc.stdin.write(json.dumps({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})+"\n");proc.stdin.flush()
         tools=rpc("tools/list",{},2).get("result",{}).get("tools",[])
-        self.mcp_clients[name]={"process":proc,"rpc":rpc,"tools":tools};return self.mcp_clients[name]
+        self.mcp_clients[name]={"process":proc,"rpc":rpc,"tools":tools,"protocol":negotiated,"command":command}
+        return self.mcp_clients[name]
 
     def mcp_panel(self):
         if not self.project:return messagebox.showwarning("MCP","Open a project first.")
@@ -553,9 +637,15 @@ class Kclone(tk.Tk):
             s=lb.curselection()
             if not s:return
             name=lb.get(s[0]).replace("● ","").replace("○ ","")
-            try:
-                client=self.mcp_connect(name,cfg["mcpServers"][name]);out.delete("1.0","end");out.insert("1.0",json.dumps(client["tools"],indent=2));self.log("MCP connected: "+name)
-            except Exception as e:messagebox.showerror("MCP",str(e))
+            out.delete("1.0","end");out.insert("1.0","Connecting to "+name+"...\\n")
+            def connect():
+                try:
+                    client=self.mcp_connect(name,cfg["mcpServers"][name])
+                    info={"status":"connected","server":name,"protocol":client.get("protocol"),"tool_count":len(client["tools"]),"tools":[t.get("name") for t in client["tools"]]}
+                    self.after(0,lambda:(out.delete("1.0","end"),out.insert("1.0",json.dumps(info,indent=2)),self.log("MCP connected: "+name+" ("+str(len(client["tools"]))+" tools)")))
+                except Exception as e:
+                    self.after(0,lambda:(out.delete("1.0","end"),out.insert("1.0","CONNECTION FAILED\\n\\n"+str(e)),messagebox.showerror("MCP connection failed",str(e))))
+            threading.Thread(target=connect,daemon=True).start()
         bar=tk.Frame(left,bg=PANEL);bar.pack(fill="x",padx=8,pady=8)
         GlowButton(bar,"Add",add,True,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Start",start,False,90,bg=PANEL).pack(side="left",padx=2);GlowButton(bar,"Save",lambda:self.write_json(path,cfg),False,90,bg=PANEL).pack(side="left",padx=2)
     def git_panel(self):
